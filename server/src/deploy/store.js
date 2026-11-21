@@ -127,6 +127,12 @@ export function siteOfProject(projectId, provider, ownerKey) {
  * @param {string} projectId
  * @returns {{ siteId: string, ownerKey: string, hosting: 'remastly' | 'own', url: string | null } | null}
  */
+/** The copy the live site was deployed from (its newest finished deploy), or null when it never went live. @param {string} projectId */
+export function liveRecreateOf(projectId) {
+  const row = /** @type {any} */ (stmt(`SELECT recreate_id FROM deployments WHERE project_id = ? AND status = 'ready' ORDER BY started_at DESC LIMIT 1`).get(projectId));
+  return row?.recreate_id ?? null;
+}
+
 export function liveSiteOf(projectId) {
   const row = /** @type {any} */ (stmt(`SELECT site_id, owner_key, url FROM deployments WHERE project_id = ? AND status = 'ready' AND site_id IS NOT NULL
                        ORDER BY started_at DESC LIMIT 1`).get(projectId));

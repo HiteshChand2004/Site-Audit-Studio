@@ -222,6 +222,7 @@ export const GO_LIVE = {
   needServer: 'Remastly’s own server is not set up for hosting yet',
   needDomain: 'Type the domain first',
   deployTitle: 'Put the copy online',
+  includesChanges: (list) => `Includes ${list.length === 1 ? 'the page' : `the ${list.length} pages`} published from Growth OS on this copy (${list.slice(0, 3).map((c) => c.page).join(', ')}${list.length > 3 ? ' and more' : ''}): a deploy keeps ${list.length === 1 ? 'it' : 'them'}.`,
   deploySub: (stack, when) => `Publishes the ${stack} version of your latest copy${when ? ` (made ${when})` : ''}.`,
   updateSub: (stack, when) => `Replaces what is live with the ${stack} version of your latest copy${when ? ` (made ${when})` : ''}. The address stays the same.`,
   blockedTitle: 'This copy cannot go live yet',

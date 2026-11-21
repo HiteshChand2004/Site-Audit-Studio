@@ -226,6 +226,7 @@ export default function GoLiveStep({ project, onGoCreate }) {
         title={T.deployTitle}
         sub={(live ? T.updateSub : T.deploySub)(stackName, data.copiedAt ? timeAgo(data.copiedAt) : null)}
       >
+        {data.includes?.length > 0 && <p className={ws.hint} style={{ margin: 0 }}>{T.includesChanges(data.includes)}</p>}
         {readiness.blockers.length > 0 && (
           <Alert tone="bad" title={T.blockedTitle}>
             <ul className={styles.plainList}>

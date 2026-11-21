@@ -1105,3 +1105,52 @@ test('Tracking: a deploy with no ID set sends every page exactly as the copy has
   assert.equal(plan.tracking, null);
   assert.ok(plan.entries.every((e) => e.file), 'every entry is the copy\'s own file');
 });
+
+// ---- Go live keeps the pages Growth OS published (changes/site.js publishedOnCopy) ----
+
+test('Go live deploys the copy with the pages Growth OS published on it, and warns before a newer copy leaves them out', async () => {
+  applyMigrations(db, { migrations: MIGRATIONS.filter((m) => m.id === '2026-11-20-change-requests') });
+  const { insertChange, updateChange } = await import('../src/changes/store.js');
+  const { changeSiteDir, linkTree } = await import('../src/changes/site.js');
+  const project = seedProject(db, { name: 'mu', targetDomain: 'https://mu.test' });
+  const copyReport = { asIs: { stack: 'html', address: { used: 'https://mu.test' } } };
+  const { recreateId, dir } = await finishedCopy({ projectId: project.id, report: copyReport, reaudit: { checklist: { items: [] } } });
+  // A page Growth OS published on this copy: its change folder is the copy plus the page.
+  const change = insertChange({ requestId: 'gos:itsm', projectId: project.id, type: 'page.create', page: '/use-cases/itsm/', payload: { draft: { h1: 'ITSM' } }, callbackUrl: null });
+  const site = changeSiteDir(project.id, change.id);
+  await linkTree(path.join(dir, 'stacks', 'html'), site);
+  await mkdir(path.join(site, 'use-cases', 'itsm'), { recursive: true });
+  await writeFile(path.join(site, 'use-cases', 'itsm', 'index.html'), '<!doctype html><title>ITSM</title><h1>ITSM</h1>');
+  updateChange(change.id, { status: 'published', baseRecreate: recreateId, publishedAt: new Date().toISOString(), result: { stack: 'html', servedAt: '/use-cases/itsm/' } });
+  await call('PUT', `/projects/${project.id}/tracking`, { ga4: 'G-MUTEST1234' });
+
+  let r = await call('GET', `/projects/${project.id}/deploy`);
+  assert.deepEqual(r.body.includes.map((c) => c.page), ['/use-cases/itsm/'], 'the card says the page comes along');
+  r = await call('POST', `/projects/${project.id}/deploy`, {});
+  assert.equal(r.status, 202, JSON.stringify(r.body));
+  assert.deepEqual(r.body.includes.map((c) => c.page), ['/use-cases/itsm/']);
+  assert.equal((await waitDone(project.id)).status, 'ready');
+  let files = zipEntries(fake.lastZip);
+  assert.ok(files.includes('use-cases/itsm/index.html'), 'a Go live deploy keeps the published page');
+  assert.ok(files.includes('remastly-tracking.js'), 'and the tracking is still added');
+  assert.ok(zipText(fake.lastZip, 'use-cases/itsm/index.html').includes('G-MUTEST1234'));
+
+  // A newer copy (made from the live site, so without the page): the deploy says so before it takes the page off.
+  await finishedCopy({ projectId: project.id, report: copyReport, reaudit: { checklist: { items: [] } } });
+  r = await call('GET', `/projects/${project.id}/deploy`);
+  assert.deepEqual(r.body.includes, []);
+  const warn = r.body.readiness.warnings.find((w) => w.id === 'changes-dropped');
+  assert.ok(warn, 'warned');
+  assert.match(warn.text, /\/use-cases\/itsm\//);
+  r = await call('POST', `/projects/${project.id}/deploy`, {});
+  assert.equal(r.status, 409, 'not without a yes');
+  assert.ok(r.body.warnings.some((w) => w.id === 'changes-dropped'));
+  r = await call('POST', `/projects/${project.id}/deploy`, { accept: ['changes-dropped'] });
+  assert.equal(r.status, 202, JSON.stringify(r.body));
+  assert.equal((await waitDone(project.id)).status, 'ready');
+  files = zipEntries(fake.lastZip);
+  assert.ok(!files.includes('use-cases/itsm/index.html'), 'the newer copy goes live as it is');
+  // Once the newer copy is live, nothing is left to warn about.
+  r = await call('GET', `/projects/${project.id}/deploy`);
+  assert.equal(r.body.readiness.warnings.some((w) => w.id === 'changes-dropped'), false);
+});

@@ -206,3 +206,13 @@ never asks the real AI).
   unchanged, `result.checkedAt`. **Make again** (`…/make-again`, ready / failed / turned down, never a live change): built again
   from the request with the current code, back to ready, same preview address; Growth OS is told each status.
 - Tests: `changes-builder` (4), `growthos-changes` (+1).
+
+## Go live keeps the published pages (2026-11-21)
+A Go live deploy used to upload the bare copy (`routes/deploy.js` → `runDeploy` without `dir`), so it took every page Growth OS
+had published off the live site (own360: a page published at 12:56 was gone after a deploy at 13:15 that turned tracking on).
+One rule now says what the website is: `changes/site.js publishedOnCopy(projectId, recreateId, stack)` = the newest published
+change made on that copy (its folder holds every change published on it), else the copy. `resolveBase` (the next change) and the
+Go live deploy both use it; a deploy of that folder goes through `changeDeploySource` (shared with `publishChange`). `GET/POST
+…/deploy` answer `includes` (the pages it keeps; the card says so). Deploying another copy than the one the live site runs warns
+first (readiness `changes-dropped`, accepted by id, naming the pages), once: after that copy is live there is nothing to warn about.
+Test: `deploy-netlify` (+1). A page already taken off comes back with one Go live deploy, as long as its change folder exists.
