@@ -6,8 +6,7 @@
 // the domain go once the domain's own DNS servers show the change). While the change spreads, Remastly keeps answering the
 // domain as long as others may remember the record (its TTL, hosting/store.js setHosts keepMinutes), so no visitor gets an error.
 import { request } from 'node:https';
-import { Resolver } from 'node:dns/promises';
-import { checkRecords, domainPlan } from './domain.js';
+import { checkRecords, dnsConfig, domainPlan } from './domain.js';
 import { patchGoLive, PRIVATE_V4, readGoLive } from './passThrough.js';
 
 /** Where the old server is asked (HTTPS); tests point it at a stand-in with its own certificate authority. */
@@ -19,46 +18,25 @@ const MIN_MINUTES = 10;
 const UNKNOWN_MINUTES = 60;
 
 /**
- * A name's A records as the domain's own DNS servers give them (never a cache), with their lifetime in seconds; null when
- * none answers. Tests replace `ask`.
+ * How long others may still send visitors to the address the names have now: the longest lifetime of their records as the
+ * domain's own DNS servers give it (deploy/authority.js), at least MIN_MINUTES; UNKNOWN_MINUTES when they do not answer.
+ * @param {string[]} hosts
  */
-export const authorityConfig = {
-  /** @param {string} host @param {string} apex @returns {Promise<{ address: string, ttl: number }[] | null>} */
-  ask: async (host, apex) => {
-    const any = new Resolver({ timeout: 4000, tries: 1 });
-    const servers = await any.resolveNs(apex).catch(() => []);
-    for (const ns of servers) {
-      const ip = (await any.resolve4(ns).catch(() => []))[0];
-      if (!ip) continue;
-      const own = new Resolver({ timeout: 4000, tries: 1 });
-      own.setServers([ip]);
-      const found = await own.resolve4(host, { ttl: true }).catch((e) => (e.code === 'ENODATA' || e.code === 'ENOTFOUND' ? [] : null));
-      if (found) return found;
-    }
-    return null;
-  },
-};
-
-/**
- * How long others may still send visitors to the address the names have now: the longest lifetime of their records, at least
- * MIN_MINUTES; UNKNOWN_MINUTES when it cannot be read.
- * @param {string[]} hosts @param {string} apex
- */
-export async function minutesToKeep(hosts, apex) {
+export async function minutesToKeep(hosts) {
   let longest = -1;
   for (const h of hosts) {
-    const found = await authorityConfig.ask(h, apex);
-    if (!found) return UNKNOWN_MINUTES;
-    for (const r of found) longest = Math.max(longest, r.ttl);
+    const found = await dnsConfig.resolver.lookup(h);
+    if (found.source !== 'authoritative') return UNKNOWN_MINUTES;
+    if (found.ttl !== null) longest = Math.max(longest, found.ttl);
   }
   return longest < 0 ? MIN_MINUTES : Math.max(MIN_MINUTES, Math.ceil(longest / 60));
 }
 
-/** Whether the domain's own DNS servers send every name to `ip` now. @param {string[]} hosts @param {string} apex @param {string} ip */
-export async function pointsTo(hosts, apex, ip) {
+/** Whether the domain's own DNS servers send every name to `ip` now. @param {string[]} hosts @param {string} ip */
+export async function pointsTo(hosts, ip) {
   for (const h of hosts) {
-    const found = await authorityConfig.ask(h, apex);
-    if (!found?.length || !found.every((r) => r.address === ip)) return false;
+    const found = await dnsConfig.resolver.lookup(h);
+    if (found.source !== 'authoritative' || !found.addresses.length || !found.addresses.every((a) => a === ip)) return false;
   }
   return true;
 }

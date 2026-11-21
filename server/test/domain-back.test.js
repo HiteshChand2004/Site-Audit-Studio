@@ -9,7 +9,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { authorityConfig, checkOldServer, minutesToKeep, oldServerConfig, parseOldIp, pointsTo, rememberBefore, rememberedIp } from '../src/deploy/domainBack.js';
+import { checkOldServer, minutesToKeep, oldServerConfig, parseOldIp, pointsTo, rememberBefore, rememberedIp } from '../src/deploy/domainBack.js';
 import { dnsConfig, parseDomain } from '../src/deploy/domain.js';
 import { hostingPaths, hostsOf, publishRelease, readHosts, setHosts } from '../src/hosting/store.js';
 import { sitesHandler } from '../src/hosting/server.js';
@@ -59,11 +59,11 @@ test('what the domain pointed to is noted when it is put on the site, and kept o
   const saved = dnsConfig.resolver;
   const d = /** @type {any} */ (parseDomain('shop.acmeshop.com'));
   try {
-    dnsConfig.resolver = { resolve4: async (h) => (h === 'shop.acmeshop.com' ? ['198.51.100.7'] : []), resolveCname: async () => [] };
+    dnsConfig.resolver = { lookup: async (h) => ({ addresses: h === 'shop.acmeshop.com' ? ['198.51.100.7'] : [], ttl: null, cnames: [], source: 'authoritative' }) };
     await rememberBefore(P, d, '13.205.53.133');
     assert.equal(await rememberedIp(P, 'shop.acmeshop.com'), '198.51.100.7');
     // Later it points here: what it was before stays noted.
-    dnsConfig.resolver = { resolve4: async () => ['13.205.53.133'], resolveCname: async () => [] };
+    dnsConfig.resolver = { lookup: async () => ({ addresses: ['13.205.53.133'], ttl: null, cnames: [], source: 'authoritative' }) };
     await rememberBefore(P, d, '13.205.53.133');
     assert.equal(await rememberedIp(P, 'shop.acmeshop.com'), '198.51.100.7');
     assert.equal(await rememberedIp(P, 'another.acmeshop.com'), null);
@@ -111,25 +111,30 @@ test('a domain taken off while DNS moves it back is still answered for a while, 
 });
 
 test('how long the domain is still answered: its records\' own lifetime, at least 10 minutes; let go by hand only once moved', async () => {
-  const saved = authorityConfig.ask;
+  const saved = dnsConfig.resolver;
   const zone = { 'shop.acmeshop.com': [{ address: '13.205.53.133', ttl: 600 }], 'www.shop.acmeshop.com': [{ address: '13.205.53.133', ttl: 300 }] };
-  authorityConfig.ask = async (host) => zone[host] ?? null;
+  // A name not in the zone: its DNS servers did not answer (a public resolver did).
+  dnsConfig.resolver = {
+    lookup: async (host) => (zone[host]
+      ? { addresses: zone[host].map((r) => r.address), ttl: Math.max(...zone[host].map((r) => r.ttl)), cnames: [], source: 'authoritative' }
+      : { addresses: [], ttl: null, cnames: [], source: 'public' }),
+  };
   try {
     const hosts = ['shop.acmeshop.com', 'www.shop.acmeshop.com'];
-    assert.equal(await minutesToKeep(hosts, 'acmeshop.com'), 10, 'GoDaddy\'s 600 seconds');
+    assert.equal(await minutesToKeep(hosts), 10, 'GoDaddy\'s 600 seconds');
     zone['www.shop.acmeshop.com'] = [{ address: '13.205.53.133', ttl: 3600 }];
-    assert.equal(await minutesToKeep(hosts, 'acmeshop.com'), 60, 'the longest of the names');
+    assert.equal(await minutesToKeep(hosts), 60, 'the longest of the names');
     zone['shop.acmeshop.com'] = [{ address: '13.205.53.133', ttl: 60 }];
     zone['www.shop.acmeshop.com'] = [{ address: '13.205.53.133', ttl: 120 }];
-    assert.equal(await minutesToKeep(hosts, 'acmeshop.com'), 10, 'never less than 10 minutes');
-    assert.equal(await minutesToKeep(['unknown.acmeshop.com'], 'acmeshop.com'), 60, 'unreadable: GoDaddy\'s default hour');
+    assert.equal(await minutesToKeep(hosts), 10, 'never less than 10 minutes');
+    assert.equal(await minutesToKeep(['unknown.acmeshop.com']), 60, 'unreadable: GoDaddy\'s default hour');
 
-    assert.equal(await pointsTo(hosts, 'acmeshop.com', '198.51.100.7'), false, 'not changed yet');
+    assert.equal(await pointsTo(hosts, '198.51.100.7'), false, 'not changed yet');
     zone['shop.acmeshop.com'] = [{ address: '198.51.100.7', ttl: 600 }];
-    assert.equal(await pointsTo(hosts, 'acmeshop.com', '198.51.100.7'), false, 'one name still points here');
+    assert.equal(await pointsTo(hosts, '198.51.100.7'), false, 'one name still points here');
     zone['www.shop.acmeshop.com'] = [{ address: '198.51.100.7', ttl: 600 }];
-    assert.equal(await pointsTo(hosts, 'acmeshop.com', '198.51.100.7'), true);
+    assert.equal(await pointsTo(hosts, '198.51.100.7'), true);
   } finally {
-    authorityConfig.ask = saved;
+    dnsConfig.resolver = saved;
   }
 });
