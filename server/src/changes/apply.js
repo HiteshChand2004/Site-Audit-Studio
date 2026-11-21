@@ -124,6 +124,143 @@ function framedDraft($, parts, d, { links, contact, changeId }) {
   return out.join('\n');
 }
 
+/** Elements that are never a page's own part (scripts and the like). */
+const NOT_A_PART = new Set(['script', 'style', 'link', 'meta', 'template', 'noscript']);
+const partsOf = ($, el) => $(el).children().filter((_, k) => !NOT_A_PART.has(/** @type {any} */ (k).tagName?.toLowerCase()));
+const textOf = ($, el) => $(el).text().replace(/\s+/g, ' ').trim().toLowerCase();
+const HEADINGS = 'h1, h2, h3, h4, h5, h6';
+/** What carries a page's own words or pictures (a link's label stays: a button keeps where it leads). */
+const OWN_CONTENT = 'p, h3, h4, h5, h6, li, blockquote, figcaption, img, picture, video';
+
+const addStyle = ($, el, css) => {
+  const own = ($(el).attr('style') ?? '').trim().replace(/;$/, '');
+  $(el).attr('style', own ? `${own};${css}` : css);
+};
+/**
+ * Lets words put where a builder drew a one-line text box (sized to its own words: white-space pre, width auto) wrap inside
+ * its section: the element and its own text box wrap, and the few boxes above it are no wider than what holds them. A longer
+ * heading than the template's otherwise runs off the screen.
+ */
+function letWrap($, el, stop) {
+  addStyle($, el, 'white-space:pre-wrap;overflow-wrap:break-word;max-width:100%');
+  let cur = $(el).parent();
+  for (let i = 0; i < 4 && cur.length && cur.get(0) !== stop; i++) {
+    addStyle($, cur, cur.children().length === 1 ? 'white-space:pre-wrap;max-width:100%' : 'max-width:100%');
+    cur = cur.parent();
+  }
+}
+
+/**
+ * Removes what a part says or shows of the template page (`keep`: elements that stay), then every box that held words and
+ * is now empty, so no empty card of another page is left behind. Pictures of another page are never copied.
+ */
+function clearOwn($, part, keep) {
+  const kept = new Set(keep.flatMap((k) => [k, ...$(k).find('*').toArray()]));
+  const holders = $(part).find('*').filter((_, el) => $(el).text().trim() !== '').toArray();
+  $(part).find(OWN_CONTENT).filter((_, el) => !kept.has(el) && $(el).closest('a, button').length === 0 && !keep.some((k) => $(el).find(k).length)).remove();
+  for (const el of holders.reverse()) {
+    if (kept.has(el) || keep.some((k) => $(el).find(k).length)) continue;
+    if ($(el).text().trim() === '' && !$(el).find('svg, img, video, canvas').length) $(el).remove();
+  }
+}
+
+/**
+ * A page a site builder draws as one block (Framer, and the like): no <main>, its body one element whose children are the
+ * page's sections, each in several copies for computer, tablet and phone; a heading's look comes from the wrappers around it,
+ * not from its own class. The new page is made in that structure, so every wrapper (and its look) stays:
+ *  - the parts with links and no heading of their own (the header, the footer and their copies) stay as they are;
+ *  - every part holding the page's main heading (each copy of the top) gets the draft's heading and intro;
+ *  - one of the page's sections with a second heading and a paragraph is the model of a section: copied once per section of
+ *    the draft, its heading and first paragraph set, the rest of what it said or showed removed;
+ *  - the template page's other sections are left out (another page's words and pictures are never copied).
+ * Returns false (nothing changed) when the page is not built that way.
+ */
+function draftInPlace($, d, { links, contact, changeId }) {
+  let root = $('body');
+  // the page's own block: down through wrappers that hold one part only (an empty helper beside it, such as a builder's
+  // store of icons, does not count); a body of several parts is not a page drawn as one block
+  let depth = 0;
+  for (; depth < 6; depth++) {
+    const kids = partsOf($, root).filter((_, k) => $(k).text().trim() !== '' || $(k).find(HEADINGS).length > 0);
+    if (kids.length !== 1) break;
+    root = kids.first();
+  }
+  if (depth === 0) return false;
+  const sections = partsOf($, root).toArray();
+  if (sections.length < 3) return false;
+  const h1 = $(root).find('h1').first();
+  if (!h1.length) return false;
+  const oldHeading = textOf($, h1);
+  const isChrome = (el) => $(el).is('nav, header, footer, [role="navigation"], [role="banner"], [role="contentinfo"]') || $(el).find('nav, header, footer, [role="navigation"], [role="contentinfo"]').length > 0;
+  const chrome = new Set(sections.filter(isChrome));
+  // a copy of a header or footer (the phone's) has the same words as one found by its tags
+  const chromeTexts = new Set([...chrome].map((el) => textOf($, el)));
+  for (const el of sections) if (!chrome.has(el) && chromeTexts.has(textOf($, el)) && textOf($, el)) chrome.add(el);
+  const heroes = sections.filter((el) => !chrome.has(el) && $(el).find('h1').length > 0);
+  const content = sections.filter((el) => !chrome.has(el) && !heroes.includes(el) && textOf($, el) !== '');
+  // the paragraph to write into: a sentence where there is one (not a card's two-word title), else the first; with every copy
+  // of it (the same words in the computer's, the tablet's and the phone's version of the part)
+  const paras = (el) => $(el).find('p').filter((_, p) => $(p).closest('a, button').length === 0 && $(p).text().trim() !== '');
+  const firstPara = (el) => {
+    const all = paras(el);
+    const pick = all.filter((_, p) => textOf($, p).length >= 30).first();
+    const chosen = pick.length ? pick : all.first();
+    if (!chosen.length) return chosen;
+    const words = textOf($, chosen);
+    return all.filter((_, p) => textOf($, p) === words);
+  };
+  const model = content.find((el) => $(el).find('h2').length > 0 && firstPara(el).length > 0);
+  if (!heroes.length || !model) return false;
+
+  for (const hero of heroes) {
+    // the heading in every copy (a tablet copy may draw it as an h2 with the same words)
+    const heads = $(hero).find(HEADINGS).filter((_, el) => $(el).is('h1') || textOf($, el) === oldHeading).toArray();
+    for (const el of heads) $(el).text(d.h1 || d.title);
+    const intro = firstPara(hero);
+    const keep = [...heads];
+    if (intro.length && d.intro) {
+      intro.text(d.intro);
+      keep.push(...intro.toArray());
+    }
+    clearOwn($, hero, keep);
+    for (const el of keep) letWrap($, el, hero);
+  }
+  $(heroes[0]).attr('data-remastly-change', changeId);
+
+  const section = (/** @type {string} */ h2, /** @type {string} */ body, /** @type {string} */ html = '') => {
+    const clone = $(model).clone();
+    clone.find('[id]').removeAttr('id');
+    clone.removeAttr('id');
+    // the section's heading in every copy: the copies of the model's first second heading
+    const first = textOf($, clone.find('h2').first());
+    const heads = clone.find('h2').filter((_, el) => textOf($, el) === first).toArray();
+    for (const el of heads) $(el).text(h2);
+    const para = firstPara(clone);
+    const keep = [...heads];
+    if (para.length && (body || html)) {
+      if (html) para.html(html);
+      else para.text(body);
+      keep.push(...para.toArray());
+    }
+    clone.find('h2').filter((_, el) => !heads.includes(el)).remove();
+    clearOwn($, clone, keep);
+    for (const el of keep) letWrap($, el, clone.get(0));
+    return clone;
+  };
+  const made = d.sections.map((s) => section(s.h2 || d.h1, s.body ?? ''));
+  if (d.proof.length) made.push(section('Proof', d.proof.join(' · ')));
+  for (const f of d.faq) made.push(section(f.q, f.a));
+  const end = [
+    d.cta ? `<a href="${esc(contact ?? '/')}">${esc(d.cta)}</a>` : '',
+    ...links.map((l) => `<a href="${esc(l.path)}">${esc(l.title)}</a>`),
+  ].filter(Boolean);
+  if (end.length) made.push(section(links.length ? 'Related' : d.cta, '', end.join(' · ')));
+
+  $(model).before(made);
+  for (const el of content) $(el).remove();
+  return true;
+}
+
 function replaceContent($, html) {
   const main = $('main').first().length ? $('main').first() : $('[role="main"]').first();
   if (main.length) {
@@ -338,8 +475,11 @@ async function createPage(change, root, files, page, notes) {
   const ctx = { links, contact: contactPath(files), changeId: change.id };
   const hasMain = $('main').length > 0 || $('[role="main"]').length > 0;
   const parts = hasMain ? null : contentParts($);
-  const framed = parts?.length ? framedDraft($, parts, d, ctx) : null;
-  if (framed) {
+  // a page a site builder draws as one block: the draft is made in its own structure (draftInPlace)
+  const inPlace = !hasMain && draftInPlace($, d, ctx);
+  const framed = !inPlace && parts?.length ? framedDraft($, parts, d, ctx) : null;
+  if (inPlace) notes.push('The page is drawn as one block (a site builder\'s): the draft was put into its own sections, so their look stays.');
+  else if (framed) {
     parts.first().replaceWith(framed);
     parts.slice(1).remove();
   } else replaceContent($, draftHtml($, findMain($), d, ctx));

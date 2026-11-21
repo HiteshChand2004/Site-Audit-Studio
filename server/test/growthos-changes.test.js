@@ -271,3 +271,63 @@ test('a tool screen asked to be improved becomes a new page; the template is nev
   assert.deepEqual(about.expect, [], 'no heading was written, so none is looked for');
   assert.ok(about.notes.some((n) => n.includes('no first heading')));
 });
+
+test('a preview address keeps working after a restart; Check again and Make again; nothing live is made again', { timeout: 60000 }, async () => {
+  const { revokePreviewToken, resolvePreviewToken, tokenOf } = await import('../src/recreate/previewTokens.js');
+  const { recheckSettled } = await import('../src/changes/worker.js');
+  let checks = 0;
+  testHooks.check = async () => {
+    checks++;
+    return { checks: [{ id: 'stays', label: 'Still there', before: null, after: true, detail: null }], score: { before: 50, after: 60 + checks }, ok: true, shots: null, notes: [] };
+  };
+  const made = await call('POST', '/api/ext/v1/change-requests', { requestId: 'gos:again', type: 'meta.title', site: { url: 'https://predco.example' }, page: '/contact/', fix: { title: 'Contact the PredCo team today' } });
+  assert.equal(made.status, 202, JSON.stringify(made.body));
+  await idle();
+  const ready = await waitStatus(project.id, made.body.id, ['ready', 'failed']);
+  assert.equal(ready.status, 'ready', ready.message);
+  const token = tokenOf(ready.previewUrl);
+  assert.ok(token);
+
+  // A restart empties the previews this server knows: the same address still opens the change's folder.
+  revokePreviewToken(token);
+  const entry = resolvePreviewToken(token);
+  assert.equal(entry?.root, changeSiteDir(project.id, ready.id), 'the saved address stands for the change again');
+  const again = await call('GET', `/api/projects/${project.id}/changes/${ready.id}`, undefined, null);
+  assert.equal(tokenOf(again.body.change.previewUrl), token, 'the app shows the same address');
+
+  // Check again: new checks and pictures, the status and the page unchanged.
+  const page = await readFile(path.join(changeSiteDir(project.id, ready.id), 'contact', 'index.html'), 'utf8');
+  const rc = await call('POST', `/api/projects/${project.id}/changes/${ready.id}/check-again`, {}, null);
+  assert.equal(rc.status, 202, JSON.stringify(rc.body));
+  assert.equal((await call('POST', `/api/projects/${project.id}/changes/${ready.id}/check-again`, {}, null)).status, 409, 'once at a time');
+  await recheckSettled(ready.id);
+  const checked = (await call('GET', `/api/projects/${project.id}/changes/${ready.id}`, undefined, null)).body.change;
+  assert.equal(checked.status, 'ready');
+  assert.ok(checked.checkedAt, 'when it was checked again');
+  assert.equal(checked.score.after, 62);
+  assert.ok(checked.notes.some((n) => /^Checked again /.test(n)));
+  assert.equal(await readFile(path.join(changeSiteDir(project.id, ready.id), 'contact', 'index.html'), 'utf8'), page, 'the page is not changed');
+
+  // Make again: built again from the request, back to ready, the same preview address; a turned-down one too.
+  const rm = await call('POST', `/api/projects/${project.id}/changes/${ready.id}/make-again`, {}, null);
+  assert.equal(rm.status, 202, JSON.stringify(rm.body));
+  await idle();
+  const remade = await waitStatus(project.id, ready.id, ['ready', 'failed']);
+  assert.equal(remade.status, 'ready', remade.message);
+  assert.equal(tokenOf(remade.previewUrl), token);
+  assert.match(await readFile(path.join(changeSiteDir(project.id, ready.id), 'contact', 'index.html'), 'utf8'), /<title>Contact the PredCo team today<\/title>/);
+  await call('POST', `/api/projects/${project.id}/changes/${ready.id}/reject`, { reason: 'later' }, null);
+  assert.equal((await call('POST', `/api/projects/${project.id}/changes/${ready.id}/make-again`, {}, null)).status, 202, 'a turned-down change can be made again');
+  await idle();
+  assert.equal((await waitStatus(project.id, ready.id, ['ready', 'failed'])).status, 'ready');
+
+  // A live change is never made again here, and one still being made cannot be checked again.
+  const list = (await call('GET', `/api/projects/${project.id}/changes`, undefined, null)).body.changes;
+  const live = list.find((c) => c.status === 'published');
+  assert.ok(live, 'the first test published one');
+  const refused = await call('POST', `/api/projects/${project.id}/changes/${live.id}/make-again`, {}, null);
+  assert.equal(refused.status, 409);
+  assert.match(refused.body.error, /live/);
+  const cancelled = list.find((c) => c.status === 'cancelled');
+  assert.equal((await call('POST', `/api/projects/${project.id}/changes/${cancelled.id}/check-again`, {}, null)).status, 409);
+});

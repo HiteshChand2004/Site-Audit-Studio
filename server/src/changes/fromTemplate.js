@@ -69,6 +69,49 @@ export function entryFromDraft(schema, d) {
   return { entry, notes };
 }
 
+const normWords = (/** @type {string} */ s) => String(s).replace(/\s+/g, ' ').trim().toLowerCase();
+
+/**
+ * The template's slots as the AI is asked about them. A site builder draws a part once per screen size (computer, tablet,
+ * phone), so the same words stand in two or three slots: each is asked once, and the answer is written into every copy
+ * (ChoiceAI's homepage: 243 slots, 93 different texts; the AI ran past its time). A stylesheet's or a script's own text is
+ * never the AI's to write: it is kept as it is (left empty, the filler would drop it, and the page its look).
+ * @param {import('./template.js').SlotInfo[]} slots
+ * @returns {{ slots: import('./template.js').SlotInfo[], expand: (entry: Record<string, any>) => Record<string, any>, merged: number }}
+ */
+export function compactSlots(slots) {
+  /** @type {Record<string, string>} */
+  const kept = {};
+  /** @type {Map<string, string[]>} */
+  const groups = new Map();
+  const asked = [];
+  for (const s of slots) {
+    if (s.kind === 'text' && /^(style|script)$/i.test(String(s.where ?? ''))) {
+      kept[s.id] = s.examples?.[0] ?? '';
+      continue;
+    }
+    if ((s.kind === 'text' || s.kind === 'attr') && s.examples?.length && normWords(s.examples.join(' | '))) {
+      const key = `${s.kind}|${s.attr ?? ''}|${normWords(s.examples.join(' | '))}`;
+      const same = groups.get(key);
+      if (same) {
+        same.push(s.id);
+        continue;
+      }
+      groups.set(key, [s.id]);
+    }
+    asked.push(s);
+  }
+  const expand = (/** @type {Record<string, any>} */ entry) => {
+    const out = { ...entry, ...kept };
+    for (const ids of groups.values()) {
+      if (ids.length < 2 || !Object.hasOwn(entry, ids[0])) continue;
+      for (const id of ids.slice(1)) out[id] = entry[ids[0]];
+    }
+    return out;
+  };
+  return { slots: asked, expand, merged: slots.length - asked.length };
+}
+
 /** The note for blocks left out because nothing could fill them (template.js emptiedBlocks). */
 const EMPTIED = (/** @type {number} */ n) => `${n} block(s) without a heading (an illustration, sample data) were left out: the draft had nothing for them, and an empty frame is not shown.`;
 
@@ -82,7 +125,9 @@ export const testHooks = { ask: null };
 async function entryFor({ mode, page, kind, from, fromFiles, t, d, root }) {
   const h1 = t.schema.slots.find((s) => s.kind === 'text' && starts(s, ['h1']));
   try {
-    const ai = await aiEntry({ mode, page, folder: kind.folder, from, fromFiles, slots: t.schema.slots, draft: d, root, ...(testHooks.ask && { ask: testHooks.ask }) });
+    const compact = compactSlots(t.schema.slots);
+    const asked = await aiEntry({ mode, page, folder: kind.folder, from, fromFiles, slots: compact.slots, draft: d, root, ...(testHooks.ask && { ask: testHooks.ask }) });
+    const ai = { ...asked, entry: compact.expand(asked.entry) };
     // usable: the page's heading is written (a page without its heading is no page of this kind)
     if (!h1 || (typeof ai.entry[h1.id] === 'string' && ai.entry[h1.id].trim())) return { entry: ai.entry, notes: ai.notes, by: { ai: true, ...ai.by } };
     return mapped(t, d, mode, ["The AI left the page's heading empty; the plain mapping was used instead."]);
@@ -131,7 +176,9 @@ async function fromHomepage(root, page, d) {
   const h1 = t.schema.slots.find((x) => x.kind === 'text' && starts(x, ['h1']));
   let ai;
   try {
-    ai = await aiEntry({ mode: 'create', page, folder: '/', from: ['/'], fromFiles: [home], slots: t.schema.slots, draft: d, root, single: true, ...(testHooks.ask && { ask: testHooks.ask }) });
+    const compact = compactSlots(t.schema.slots);
+    const asked = await aiEntry({ mode: 'create', page, folder: '/', from: ['/'], fromFiles: [home], slots: compact.slots, draft: d, root, single: true, ...(testHooks.ask && { ask: testHooks.ask }) });
+    ai = { ...asked, entry: compact.expand(asked.entry) };
   } catch (err) {
     return { why: `The homepage could be the template, but the AI was not used (${/** @type {Error} */ (err).message}).` };
   }

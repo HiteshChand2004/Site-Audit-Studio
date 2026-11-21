@@ -7,7 +7,36 @@ import path from 'node:path';
 import { mkdir, stat } from 'node:fs/promises';
 import { chromium } from 'playwright';
 import sharp from 'sharp';
-import { startSiteServer } from '../recreate/verify/server.js';
+import { serveCopy } from '../recreate/behavior/preserve/serve.js';
+
+/**
+ * The change's folder served the way a host serves the copy it was made on (preserve/serve.js): a packaged Next.js copy's
+ * /_next files from next-assets/, clean addresses, compression. A bare file server answered those files "not found", so the
+ * pictures and the design check saw the page with none of its stylesheets while the page itself was fine.
+ * @param {string} root
+ */
+/**
+ * A page whose builder's script was taken off (the repair below): the parts that script would have faded in (drawn at
+ * opacity 0, often moved, until it played their entrance) are shown where they end up, else they would stay invisible.
+ * Only an element whose own style starts it invisible is touched.
+ * @param {string} html
+ */
+export function shownAtStart(html) {
+  const $ = cheerio.load(html);
+  $('[style]').each((_, el) => {
+    const style = $(el).attr('style') ?? '';
+    if (!/(^|;)\s*opacity\s*:\s*0(\.0+\d?)?\s*(;|$)/i.test(style)) return;
+    const kept = style.split(';').filter((d) => d.trim() && !/^\s*(opacity|transform|filter|will-change)\s*:/i.test(d));
+    if (kept.length) $(el).attr('style', kept.join(';'));
+    else $(el).removeAttr('style');
+  });
+  return $.html();
+}
+
+async function siteServer(root) {
+  const s = await serveCopy(root);
+  return { origin: s.url.replace(/\/$/, ''), close: s.close };
+}
 import { runtimesOf, withoutRuntime } from '../recreate/convert/runtime.js';
 import { pageFile, readText, writeFresh } from './site.js';
 
@@ -70,7 +99,7 @@ const norm = (/** @type {string} */ s) => s.replace(/\s+/g, ' ').trim().toLowerC
  * @returns {Promise<{ found: string[], missing: string[], errors: string[], shots: { desktop?: string, phone?: string } }>}
  */
 export async function renderCheck(root, pagePath, expect, shotsDir, { launch = () => chromium.launch() } = {}) {
-  const server = await startSiteServer(root);
+  const server = await siteServer(root);
   const browser = await launch();
   /** @type {string[]} */
   const errors = [];
@@ -146,7 +175,7 @@ async function readDesign(page) {
  * @returns {Promise<PageCheck[]>}
  */
 export async function designCheck(root, pagePath, neighbour, { launch = () => chromium.launch() } = {}) {
-  const server = await startSiteServer(root);
+  const server = await siteServer(root);
   const browser = await launch();
   const read = async (/** @type {string} */ p, viewport, mobile) => {
     const context = await browser.newContext({ viewport, isMobile: mobile, hasTouch: mobile, deviceScaleFactor: 1 });
@@ -210,7 +239,7 @@ export async function checkChange({ baseRoot, root, applied, shotsDir, render = 
       const html = await readText(root, applied.file);
       if (runtimesOf(html).length) {
         const stripped = withoutRuntime(html);
-        await writeFresh(path.join(root, applied.file), stripped.html);
+        await writeFresh(path.join(root, applied.file), shownAtStart(stripped.html));
         notes.push(`The page's own ${stripped.runtimes.map((r) => r.name).join(', ')} script redrew the page and undid the change, so that script was taken off this page. Anything on it that needs the script (a menu, a slider) may no longer move.`);
         rendered = await render(root, applied.page, applied.expect, shotsDir);
       }

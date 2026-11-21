@@ -8,7 +8,7 @@ import { db } from '../db/index.js';
 import { growthosKey, growthosOrigin, growthosSecret, publishMode } from '../changes/config.js';
 import { changeShotsDir } from '../changes/site.js';
 import { callbacksOf, changeRow, changesReady, listChanges, viewChange } from '../changes/store.js';
-import { approveChange, DecisionError, previewOf, rejectChange } from '../changes/worker.js';
+import { approveChange, DecisionError, previewOf, recheckChange, rejectChange, remakeChange } from '../changes/worker.js';
 import { publishTarget } from '../changes/publish.js';
 
 export const changesRouter = Router();
@@ -66,6 +66,20 @@ changesRouter.post('/:id/changes/:changeId/reject', (req, res) => {
     throw err;
   }
 });
+
+// "Make again" (built again from its request with today's code) and "Check again" (its checks and pictures taken again).
+for (const [route, act] of /** @type {const} */ ([['make-again', remakeChange], ['check-again', recheckChange]])) {
+  changesRouter.post(`/:id/changes/:changeId/${route}`, (req, res) => {
+    const row = own(req);
+    if (!row) return res.status(404).json({ error: 'No such change.' });
+    try {
+      res.status(202).json({ change: shown(act(row.id)) });
+    } catch (err) {
+      if (err instanceof DecisionError) return res.status(err.status).json({ error: err.message });
+      throw err;
+    }
+  });
+}
 
 changesRouter.get('/:id/changes/:changeId/shots/:name', async (req, res) => {
   const row = own(req);

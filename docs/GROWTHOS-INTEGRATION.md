@@ -186,3 +186,23 @@ never asks the real AI).
   Growth OS stops working).
 - Growth OS stores `measureAfter`; comparing Search Console / GA4 numbers 14 days later is Growth OS's next step.
 - Never tried on a real hosting deploy (Netlify / Remastly's server) end to end; the local address was.
+
+## Builder sites, previews after a restart, Check again / Make again (2026-11-21)
+- **A page a site builder draws as one block** (Framer: no `<main>`, the body one element whose children are the sections, each in a
+  computer / tablet / phone copy, the text's look on the wrappers around it): when the template path is not used, the new page is
+  made *in that structure* (`apply.js draftInPlace`): header and footer copies kept, every copy of the top gets the heading and
+  intro, one of the page's sections is the model of each draft section (every heading and paragraph copy filled, the template's own
+  words and pictures removed), the template's other sections left out; words written into a one-line text box may wrap (`letWrap`).
+  Before, the whole block was replaced by bare `<h1 class="framer-text">`… and the page showed Framer's defaults (Inter 16px).
+- **The AI is asked about each different text once** (`fromTemplate.js compactSlots`): the copies of a part share one answer, and a
+  `<style>` / `<script>` slot is never asked, always kept (ChoiceAI's homepage: 244 slots → 114). `template.js fillTemplate` writes a
+  stylesheet's or script's text unescaped.
+- **Checks use the copy server** (`checks.js siteServer` = `preserve/serve.js serveCopy`): a packaged Next.js copy's `/_next`
+  files load, so the pictures and the design check see the page's stylesheets. A page whose builder's script is taken off by the
+  repair shows the parts it would have faded in (`shownAtStart`).
+- **Preview addresses survive a restart**: a change keeps its preview address (`preview_url`); an unknown token is looked up there
+  (`previewTokens.js addPreviewSource`, `store.js changeByPreviewToken`), so the same link works after a deploy.
+- **Check again** (`POST /api/projects/:id/changes/:changeId/check-again`, ready or published): checks and pictures again, the page
+  unchanged, `result.checkedAt`. **Make again** (`…/make-again`, ready / failed / turned down, never a live change): built again
+  from the request with the current code, back to ready, same preview address; Growth OS is told each status.
+- Tests: `changes-builder` (4), `growthos-changes` (+1).

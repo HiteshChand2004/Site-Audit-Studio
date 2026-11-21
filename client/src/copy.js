@@ -197,6 +197,10 @@ export const CHANGES = {
   rejectPlaceholder: 'For example: the picture does not fit',
   rejectConfirm: 'Turn it down',
   keep: 'Keep it',
+  checkAgain: 'Check again',
+  checkAgainHelp: 'Takes the checks and the pictures again, without changing the page.',
+  makeAgain: 'Make again',
+  makeAgainHelp: 'Makes the page again from Growth OS\'s draft with Remastly\'s latest code. It comes back here to look at before it goes live.',
 };
 
 /** Step 5, Go live (layout/steps/GoLiveStep.jsx): deploying a finished copy to the owner's Netlify account. */
