@@ -46,15 +46,15 @@ export function aiMode() {
 
 /**
  * One question, one text answer. Rejects with AiError (a sentence to show) when it cannot be asked or answered.
- * @param {{ system: string, prompt: string, timeoutMs?: number }} q
+ * @param {{ system: string, prompt: string, timeoutMs?: number, cli?: { bin: string, pre?: string[] } }} q
  * @returns {Promise<{ text: string, model: string, costUsd: number | null, ms: number, way: 'api' | 'cli' }>}
  */
-export async function askClaude({ system, prompt, timeoutMs = AI_TIMEOUT_MS }) {
+export async function askClaude({ system, prompt, timeoutMs = AI_TIMEOUT_MS, cli }) {
   const mode = aiMode();
   if (mode === 'off') throw new AiError('The AI is off (SAS_CHANGES_AI=off, or no ANTHROPIC_API_KEY and no Claude Code program found).');
   const t0 = Date.now();
   if (mode === 'api') return { ...(await askApi({ system, prompt, timeoutMs })), ms: Date.now() - t0, way: 'api' };
-  return { ...(await askCli({ system, prompt, timeoutMs })), ms: Date.now() - t0, way: 'cli' };
+  return { ...(await askCli({ system, prompt, timeoutMs, cli })), ms: Date.now() - t0, way: 'cli' };
 }
 
 async function askApi({ system, prompt, timeoutMs }) {
@@ -70,25 +70,39 @@ async function askApi({ system, prompt, timeoutMs }) {
   }
 }
 
-async function askCli({ system, prompt, timeoutMs }) {
+/** The last line Claude Code wrote to its error output (why it stopped or stalled: a sign-in it needs, a limit), or ''. */
+const lastLine = (/** @type {string} */ s) => s.trim().split('\n').map((l) => l.trim()).filter(Boolean).slice(-1)[0] ?? '';
+
+/**
+ * @param {{ system: string, prompt: string, timeoutMs: number, cli?: { bin: string, pre?: string[] } }} q
+ *   cli: the program to run instead of Claude Code (tests only: a stand-in script run by node)
+ */
+async function askCli({ system, prompt, timeoutMs, cli }) {
   // An empty folder of its own: no project instructions are read from where Remastly runs, and nothing can be written there.
   const dir = await mkdtemp(path.join(os.tmpdir(), 'sas-claude-'));
   try {
     const mcp = path.join(dir, 'mcp.json');
     await writeFile(mcp, '{"mcpServers":{}}');
+    // The prompt goes in through stdin, which is then closed. On the command line it failed on Windows past ~32 000 characters
+    // (ENAMETOOLONG: a homepage template is that big), and an input left open made Claude Code wait for more of it until our
+    // time limit ran out (the "did not answer within 240 s" on the server).
     const args = [
-      '-p', prompt, '--output-format', 'json', '--model', aiModel(), '--max-turns', '1',
+      ...(cli?.pre ?? []),
+      '-p', '--output-format', 'json', '--model', aiModel(), '--max-turns', '1',
       '--system-prompt', system, '--tools', '', '--strict-mcp-config', '--mcp-config', mcp, '--no-session-persistence',
       '--disallowedTools', 'Bash,Edit,Write,MultiEdit,NotebookEdit,Read,Glob,Grep,WebFetch,WebSearch,Task',
     ];
     const out = await new Promise((resolve, reject) => {
-      const child = spawn(claudeBin(), args, { cwd: dir, env: process.env, windowsHide: true });
+      const child = spawn(cli?.bin ?? claudeBin(), args, { cwd: dir, env: process.env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
       let stdout = '';
       let stderr = '';
       const timer = setTimeout(() => {
         child.kill();
-        reject(new AiError(`Claude did not answer within ${Math.round(timeoutMs / 1000)} s.`));
+        const why = lastLine(stderr);
+        reject(new AiError(`Claude did not answer within ${Math.round(timeoutMs / 1000)} s.${why ? ` Its last message: ${why.slice(0, 200)}` : ' It wrote nothing (check that Claude Code is signed in on this server).'}`));
       }, timeoutMs);
+      child.stdin.on('error', () => {}); // a program that stopped before reading all of it: its exit says why
+      child.stdin.end(prompt);
       child.stdout.on('data', (d) => { stdout += d; });
       child.stderr.on('data', (d) => { stderr += d; });
       child.on('error', (e) => {
@@ -97,7 +111,7 @@ async function askCli({ system, prompt, timeoutMs }) {
       });
       child.on('close', (code) => {
         clearTimeout(timer);
-        if (code !== 0 && !stdout.trim()) return reject(new AiError(`Claude Code stopped (${code}): ${stderr.trim().split('\n').slice(-1)[0] ?? ''}`.slice(0, 300)));
+        if (code !== 0 && !stdout.trim()) return reject(new AiError(`Claude Code stopped (${code}): ${lastLine(stderr)}`.slice(0, 300)));
         resolve(stdout);
       });
     });
