@@ -60,25 +60,77 @@ export function credentialOf(body) {
 /** As kept sealed: one string. @param {NonNullable<ReturnType<typeof credentialOf>>} c */
 export const sealedOf = (c) => (c.kind === 'token' ? `${BEARER}${c.token}` : `${c.key}:${c.secret}`);
 
+// GoDaddy answers at most 5 requests a second per account (its `ratelimit-limit` header) and refuses the 6th with a 429.
+// Every request of a credential waits its turn in that credential's lane, kept here for the whole process, so two pages
+// open at once share one budget: starts at least GAP_MS apart (4 a second), at most AT_ONCE under way. Evenly spaced, not
+// 4 at once: a burst a second after a burst is 8 within one second at GoDaddy as soon as the first arrives a little late.
+const GAP_MS = 1000 / 4;
+const AT_ONCE = 2;
+// A "slow down" (429) or "busy" (503) is asked again up to RETRIES times, after the wait GoDaddy names (seconds). A longer
+// wait than MAX_WAIT_S is not sat out inside a page's request: the "slow down" message says to come back.
+const RETRIES = 4;
+const MAX_WAIT_S = 5;
+// Added to each wait so requests held back together do not all come back in the same instant.
+const JITTER_MS = 250;
+/** `next`: the earliest the next request may start. @typedef {{ next: number, busy: number, queue: (() => void)[], timer: NodeJS.Timeout | null }} Lane */
+/** @type {Map<string, Lane>} */
+const lanes = new Map();
+
+/** Lets waiting requests start while the lane has room. @param {Lane} lane */
+function pump(lane) {
+  while (lane.queue.length && lane.busy < AT_ONCE && !lane.timer) {
+    const wait = lane.next - Date.now();
+    if (wait > 0) {
+      lane.timer = setTimeout(() => { lane.timer = null; pump(lane); }, wait);
+      return;
+    }
+    lane.next = Date.now() + GAP_MS;
+    lane.busy += 1;
+    /** @type {() => void} */ (lane.queue.shift())();
+  }
+}
+
+/** @template T @param {Lane} lane @param {() => Promise<T>} request @returns {Promise<T>} */
+async function inLane(lane, request) {
+  await new Promise((start) => { lane.queue.push(() => start(undefined)); pump(lane); });
+  try {
+    return await request();
+  } finally {
+    lane.busy -= 1;
+    pump(lane);
+  }
+}
+
 /** @param {string} sealed  the credential as kept, unsealed */
 export function godaddyClient(sealed) {
   const isToken = sealed.startsWith(BEARER);
   const authorization = isToken ? `Bearer ${sealed.slice(BEARER.length)}` : `sso-key ${sealed}`;
   const what = isToken ? 'token' : 'key and secret';
+  if (!lanes.has(sealed)) lanes.set(sealed, { next: 0, busy: 0, queue: [], timer: null });
+  const lane = /** @type {Lane} */ (lanes.get(sealed));
+  /** The answer, asked again after a "slow down" or "busy" as GoDaddy says. @param {string} method @param {string} p @param {any} [body] */
+  async function send(method, p, body) {
+    for (let retry = 0; ; retry += 1) {
+      const answer = await inLane(lane, async () => {
+        const res = await fetch(`${godaddyConfig.base}${p}`, {
+          method,
+          headers: { authorization, accept: 'application/json', ...(body && { 'content-type': 'application/json' }) },
+          body: body && JSON.stringify(body),
+          signal: AbortSignal.timeout(20_000),
+        });
+        return { res, text: await res.text() };
+      }).catch(() => { throw new DnsError('GoDaddy did not answer. Try again in a minute.', 'api'); });
+      const { status, headers } = answer.res;
+      // No header, or one that is not a number of seconds: GoDaddy's own window, one second.
+      const waitS = Number(headers.get('retry-after') ?? headers.get('ratelimit-reset')) || 1;
+      if ((status !== 429 && status !== 503) || retry === RETRIES || waitS > MAX_WAIT_S) return answer;
+      // The whole lane waits, not only this request: the others would be refused the same way.
+      lane.next = Math.max(lane.next, Date.now() + waitS * 1000 + Math.random() * JITTER_MS);
+    }
+  }
   /** @param {string} method @param {string} p @param {any} [body] */
   async function call(method, p, body) {
-    let res;
-    try {
-      res = await fetch(`${godaddyConfig.base}${p}`, {
-        method,
-        headers: { authorization, accept: 'application/json', ...(body && { 'content-type': 'application/json' }) },
-        body: body && JSON.stringify(body),
-        signal: AbortSignal.timeout(20_000),
-      });
-    } catch {
-      throw new DnsError('GoDaddy did not answer. Try again in a minute.', 'api');
-    }
-    const text = await res.text();
+    const { res, text } = await send(method, p, body);
     if (res.ok) return text ? JSON.parse(text) : null;
     let said = '';
     try { said = JSON.parse(text).message ?? ''; } catch { /* not JSON: the status says enough */ }
@@ -165,7 +217,13 @@ export async function serverClientFor(apex) {
 
 /** @typedef {ReturnType<typeof godaddyClient>} GoDaddy */
 /** @typedef {{ type: string, name: string, host: string, value: string }} Wanted */
-/** @typedef {Wanted & { before: Record<string, string[]>, needed: boolean }} Change */
+/**
+ * `done`: the types of the name Remastly has changed there, each recorded as its step starts; the undo puts back only those.
+ * @typedef {Wanted & { before: Record<string, string[]>, needed: boolean, done?: string[] }} Change
+ */
+
+/** The types the undo puts back; a change saved before steps were recorded has every type. @param {Change} c */
+export const changedTypes = (c) => (c.needed ? c.done ?? [...ROUTING] : []);
 
 /**
  * What would change at GoDaddy for the site's records to be in place: each name with what it points to now.
@@ -185,6 +243,7 @@ export async function planDns(client, apex, wanted) {
   if (servers.length && !servers.every((s) => s.endsWith('.domaincontrol.com'))) {
     throw new DnsError(`${apex} is at GoDaddy, but its DNS is run by ${servers.join(', ')}. Change the records there.`, 'elsewhere');
   }
+  // Asked all at once; the credential's lane spaces them out as GoDaddy's limit requires.
   return Promise.all(wanted.map(async (w) => {
     const before = Object.fromEntries(await Promise.all(ROUTING.map(async (t) => [t, (await client.records(apex, t, w.name)).map((r) => r.data)])));
     // In place: exactly this one record of the type, and nothing of another type sending visitors elsewhere.
@@ -193,20 +252,44 @@ export async function planDns(client, apex, wanted) {
   }));
 }
 
-/** Makes the changes planDns found needed. @param {GoDaddy} client @param {string} apex @param {Change[]} changes */
-export async function applyDns(client, apex, changes) {
-  for (const c of changes.filter((x) => x.needed)) {
+/**
+ * Makes the changes planDns found needed, one step at a time: a name's other types removed, then its own record set.
+ * `save` gets every change before each step starts, with that step's type added to `done`: a change that stops part-way
+ * (GoDaddy refusing a step, its answer lost, Remastly restarted) leaves a record the undo puts back exactly, and a step that
+ * never started is never touched by the undo.
+ * @param {GoDaddy} client @param {string} apex @param {Change[]} changes @param {(changes: Change[]) => Promise<void>} [save]
+ */
+export async function applyDns(client, apex, changes, save) {
+  const steps = changes.filter((c) => c.needed).flatMap((c) => [
     // A name with a CNAME can have nothing else, so the other types go first.
-    for (const t of ROUTING) if (t !== c.type && c.before[t].length) await client.remove(apex, t, c.name);
-    await client.replace(apex, c.type, c.name, [c.value]);
+    ...ROUTING.filter((t) => t !== c.type && c.before[t].length).map((t) => ({ c, t, says: `${t} of ${c.host} removed`, run: () => client.remove(apex, t, c.name) })),
+    { c, t: c.type, says: `${c.host} pointed to ${c.value}`, run: () => client.replace(apex, c.type, c.name, [c.value]) },
+  ]);
+  for (const [i, step] of steps.entries()) {
+    step.c.done = [...(step.c.done ?? []), step.t];
+    await save?.(changes);
+    try {
+      await step.run();
+    } catch (e) {
+      if (!(e instanceof DnsError)) throw e;
+      const says = (/** @type {typeof steps} */ list) => list.map((s) => s.says).join(', ');
+      throw new DnsError([
+        e.message,
+        i > 0 && `Changed before that: ${says(steps.slice(0, i))}.`,
+        `Stopped at: ${step.says}.`,
+        i + 1 < steps.length && `Not started: ${says(steps.slice(i + 1))}.`,
+      ].filter(Boolean).join(' '), e.code);
+    }
   }
 }
 
-/** Puts back what the names pointed to before. @param {GoDaddy} client @param {string} apex @param {Change[]} changes */
+/** Puts back what the names pointed to before, of the types Remastly changed. @param {GoDaddy} client @param {string} apex @param {Change[]} changes */
 export async function undoDns(client, apex, changes) {
-  for (const c of changes.filter((x) => x.needed)) {
-    await client.remove(apex, c.type, c.name);
-    for (const t of ROUTING) if (c.before[t].length) await client.replace(apex, t, c.name, c.before[t]);
+  for (const c of changes) {
+    const done = changedTypes(c);
+    // Its own type is cleared first: a CNAME put back can have nothing beside it.
+    if (done.includes(c.type)) await client.remove(apex, c.type, c.name);
+    for (const t of ROUTING) if (done.includes(t) && c.before[t].length) await client.replace(apex, t, c.name, c.before[t]);
   }
 }
 
@@ -218,14 +301,17 @@ const savedFile = (projectId) => path.join(projectDir(projectId), 'dns-godaddy.j
 export const readDnsChange = (projectId) => readFile(savedFile(projectId), 'utf8').then(JSON.parse, () => null);
 
 /**
- * Saves what was changed. A second change of the same domain keeps the first "before" of each name, so the undo goes back to
- * what was there before Remastly, not to Remastly's own earlier records.
+ * Saves what was changed. A second change of the same domain keeps the first "before" of each name, and every type changed
+ * by either, so the undo goes back to what was there before Remastly, not to Remastly's own earlier records.
  * @param {string} projectId @param {string} apex @param {Change[]} changes
  */
 export async function saveDnsChange(projectId, apex, changes) {
   const earlier = await readDnsChange(projectId);
-  const first = new Map((earlier?.apex === apex ? earlier.changes : []).filter((c) => c.needed).map((c) => [`${c.type} ${c.name}`, c.before]));
-  const merged = changes.map((c) => (first.has(`${c.type} ${c.name}`) ? { ...c, before: first.get(`${c.type} ${c.name}`), needed: true } : c));
+  const first = new Map((earlier?.apex === apex ? earlier.changes : []).filter((c) => c.needed).map((c) => [`${c.type} ${c.name}`, c]));
+  const merged = changes.map((c) => {
+    const e = first.get(`${c.type} ${c.name}`);
+    return e ? { ...c, before: e.before, needed: true, done: [...new Set([...changedTypes(e), ...(c.done ?? [])])] } : { ...c, done: c.done ?? [] };
+  });
   const file = savedFile(projectId);
   await mkdir(path.dirname(file), { recursive: true });
   const tmp = `${file}.${randomBytes(4).toString('hex')}.tmp`;
