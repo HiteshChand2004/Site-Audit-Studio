@@ -3,13 +3,12 @@
 // server it went live on, else the default Go live would pick), through Go live's own deploy (deploy/run.js) with the change's
 // folder; or, on a computer with no hosting (SAS_CHANGES_PUBLISH=local, or nothing set up), at this Remastly's own address
 // /live/<slug>/, which keeps one address per website and always shows its newest published change.
-import path from 'node:path';
 import { hostingIp } from '../config/index.js';
 import { runDeploy } from '../deploy/run.js';
 import { connectionToken, deployReady, getConnection, getDeployment, insertDeployment, liveSiteOf, REMASTLY, SERVER } from '../deploy/store.js';
 import { hostsOf } from '../hosting/store.js';
 import { absolute, publishMode } from './config.js';
-import { changeSiteDir } from './site.js';
+import { changeDeploySource, changeSiteDir } from './site.js';
 import { changeRow, liveBySlug, setLive } from './store.js';
 
 export const LIVE_PREFIX = '/live';
@@ -77,12 +76,12 @@ export async function publishChange(changeId, { ownerKey = 'local', pollMs = 150
     return { liveUrl: absolute(under(livePath(live.slug), page)), deploymentId: null, where: 'this Remastly (local address)' };
   }
   const stack = result.stack ?? 'html';
-  const report = { stack, outputs: { [stack]: { status: 'ready', dir: 'site', dist: '' } }, pages: [] };
+  const source = changeDeploySource(row.project_id, row.id, stack);
   const deployment = insertDeployment({ projectId: row.project_id, recreateId: row.base_recreate, stack, provider: target.provider, ownerKey: target.ownerKey });
   if (!deployment) throw new PublishError('The deploy could not be recorded.');
   await runDeploy({
-    deployment, projectId: row.project_id, recreateId: row.base_recreate, report, stack, token: target.token, ownerKey: target.ownerKey,
-    dir: path.dirname(changeSiteDir(row.project_id, row.id)),
+    deployment, projectId: row.project_id, recreateId: row.base_recreate, report: source.report, stack, token: target.token, ownerKey: target.ownerKey,
+    dir: source.dir,
   });
   // runDeploy resolves once the deploy has finished either way; the row says how
   let d = getDeployment(deployment.id);

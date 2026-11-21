@@ -49,7 +49,7 @@ import { HostingError, netlifyClient } from '../deploy/netlify.js';
 import { deployRunning, recoverDeploys, runDeploy } from '../deploy/run.js';
 import {
   connectionToken, deployReady, getConnection, insertDeployment, listConnections, listDeployments, MIGRATE_HINT, ownerKeyOf,
-  insertRestored, liveSiteOf, REMASTLY, removeConnection, restorable, saveConnection, SERVER,
+  insertRestored, liveRecreateOf, liveSiteOf, REMASTLY, removeConnection, restorable, saveConnection, SERVER,
 } from '../deploy/store.js';
 import { isOwner } from '../accounts/roles.js';
 import { checkRecords, domainPlan, parseDomain } from '../deploy/domain.js';
@@ -73,6 +73,7 @@ import { formsEndpointOf } from '../forms/connect.js';
 import { entriesCsv, importEntries, listEntries, removeEntry, removeImport, saveFormSettings } from '../forms/entries.js';
 import { entriesFromRows, IMPORT_LIMITS, parseCsv } from '../forms/importCsv.js';
 import { switchOffCheck } from '../deploy/switchOff.js';
+import { changeDeploySource, droppedChanges, publishedOnCopy } from '../changes/site.js';
 import { patchGoLive, readGoLive } from '../deploy/passThrough.js';
 import { parseGa4Id, trackingOf } from '../deploy/tracking.js';
 import { readSnapshot, removeSnapshot, snapshotForDeploy, takeSnapshot } from '../deploy/snapshot.js';
@@ -223,6 +224,8 @@ async function goLiveSetup(projectId) {
     passThrough: await readPassThrough(projectId),
     formsConnected: Boolean((await formsEndpointOf(projectId)).endpoint),
     snapshotAddresses: ((await readSnapshot(projectId))?.items ?? []).map((i) => i.address),
+    // the copy the live site runs: its Growth OS pages are not in a deploy of another copy (readiness "changes-dropped")
+    liveRecreateId: liveRecreateOf(projectId),
   };
 }
 
@@ -230,13 +233,15 @@ async function goLiveSetup(projectId) {
  * The copy, its stack and what stands in the way, for one request.
  * @param {any} project @param {any} q @param {Awaited<ReturnType<typeof goLiveSetup>>} [setup]
  */
-function subjectOf(project, q, setup = { passThrough: null, formsConnected: false, snapshotAddresses: [] }) {
+function subjectOf(project, q, setup = { passThrough: null, formsConnected: false, snapshotAddresses: [], liveRecreateId: null }) {
   const row = /** @type {any} */ (typeof q?.recreateId === 'string' && UUID.test(q.recreateId) ? doneCopy.get(q.recreateId, project.id) : latestDoneCopy.get(project.id));
   const report = row?.result_json ? withAsIsSafety(JSON.parse(row.result_json)) : null;
   const stack = typeof q?.stack === 'string' && q.stack ? q.stack : (report ? targetStack(report, project.stack) : project.stack);
   const reauditRow = /** @type {any} */ (row ? latestComparison.get(row.id, project.id) : null);
   const reaudit = reauditRow?.result_json ? JSON.parse(reauditRow.result_json) : null;
-  return { recreateId: row?.id ?? null, copiedAt: row?.finished_at ?? null, report, stack, readiness: deployReadiness({ project, report, stack, reaudit, ...setup }) };
+  const { liveRecreateId, ...rest } = setup;
+  const dropped = droppedChanges(project.id, liveRecreateId ?? null, row?.id ?? null);
+  return { recreateId: row?.id ?? null, copiedAt: row?.finished_at ?? null, report, stack, readiness: deployReadiness({ project, report, stack, reaudit, ...rest, droppedChanges: dropped }) };
 }
 
 export const deployRouter = Router();
@@ -247,8 +252,10 @@ deployRouter.get('/:id/deploy', async (req, res) => {
   if (!project) return res.status(404).json({ error: 'Project not found.' });
   const { recreateId, copiedAt, stack, readiness } = subjectOf(project, req.query, await goLiveSetup(project.id));
   const owner = isOwner(req);
+  // the Growth OS pages published on this copy: a deploy keeps them (changes/site.js publishedOnCopy)
+  const on = recreateId ? await publishedOnCopy(project.id, recreateId, stack) : null;
   res.json({
-    recreateId, copiedAt, stack, readiness,
+    recreateId, copiedAt, stack, readiness, includes: on?.includes ?? [],
     connection: getConnection(ownerKeyOf(req), 'netlify'),
     remastly: remastlyOf(req),
     // canSetUp: the one-time server setup is the owner's (GET /api/hosting/server-setup).
@@ -303,8 +310,12 @@ deployRouter.post('/:id/deploy', async (req, res) => {
   if (open.length) return res.status(409).json({ error: 'Confirm what the copy still lacks before it goes live.', warnings: open, needsAccept: true });
   const deployment = insertDeployment({ projectId: project.id, recreateId: /** @type {string} */ (recreateId), stack, provider: target === 'server' ? 'server' : 'netlify', ownerKey });
   if (!deployment) throw new DeployError('The deploy could not be recorded.', 500);
-  runDeploy({ deployment, projectId: project.id, recreateId: /** @type {string} */ (recreateId), report, stack, token, ownerKey });
-  res.status(202).json({ deployment });
+  // The website as it stands: the copy, and the pages Growth OS published on it (the newest published change's folder holds
+  // them all). A deploy of the bare copy took them off the live site.
+  const on = await publishedOnCopy(project.id, /** @type {string} */ (recreateId), stack);
+  const source = on ? changeDeploySource(project.id, on.changeId, stack) : null;
+  runDeploy({ deployment, projectId: project.id, recreateId: /** @type {string} */ (recreateId), report: source?.report ?? report, stack, token, ownerKey, ...(source && { dir: source.dir }) });
+  res.status(202).json({ deployment, includes: on?.includes ?? [] });
 });
 
 // ---- Step 2: the owner's own domain ----

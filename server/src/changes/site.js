@@ -61,12 +61,77 @@ export async function resolveBase(project) {
   const copyRoot = outputRoot(recreateDir(project.id, row.id), report, stack);
   if (!(await isDir(copyRoot))) throw new SiteError('The files of the latest copy are gone from the server. Make the copy again.', 404);
   // Changes published on top of this same copy come along; after a newer copy they do not (it was made from the live site).
-  const last = lastPublished(project.id);
-  if (last && last.base_recreate === row.id) {
-    const dir = changeSiteDir(project.id, last.id);
-    if (await isDir(dir)) return { recreateId: row.id, stack, report, root: dir, baseChange: last.id };
-  }
+  const on = await publishedOnCopy(project.id, row.id);
+  if (on) return { recreateId: row.id, stack, report, root: on.dir, baseChange: on.changeId };
   return { recreateId: row.id, stack, report, root: copyRoot, baseChange: null };
+}
+
+const publishedOnStmt = () => db.prepare(`SELECT id, page, result_json, published_at FROM change_requests
+  WHERE project_id = ? AND base_recreate = ? AND status = 'published' ORDER BY published_at`);
+/** The changes published on top of one copy, oldest first (none when the changes tables are not there). */
+export function publishedOn(/** @type {string} */ projectId, /** @type {string} */ recreateId) {
+  try {
+    return /** @type {any[]} */ (publishedOnStmt().all(projectId, recreateId));
+  } catch {
+    return [];
+  }
+}
+/** The page a change made or changed (its served address), for a person to read. */
+const pageOfChange = (/** @type {any} */ row) => {
+  try {
+    return JSON.parse(row.result_json ?? '{}').servedAt ?? row.page;
+  } catch {
+    return row.page;
+  }
+};
+
+/**
+ * The website as it stands on a copy: the newest published change made on that copy (its folder holds the copy and every
+ * change published on it before, each built on the last), or null when none was (the copy itself). Used for the next change
+ * (resolveBase) and for a Go live deploy, so a redeploy keeps the pages Growth OS published. `stack`: only a change made on
+ * that stack's files counts (a change is made on one stack's output).
+ * @param {string} projectId @param {string} recreateId @param {string | null} [stack]
+ * @returns {Promise<null | { changeId: string, dir: string, includes: { id: string, page: string }[] }>}
+ */
+export async function publishedOnCopy(projectId, recreateId, stack = null) {
+  let last;
+  try {
+    last = lastPublished(projectId);
+  } catch {
+    return null; // the changes tables are not there yet
+  }
+  if (!last || last.base_recreate !== recreateId) return null;
+  if (stack) {
+    let made = 'html';
+    try { made = JSON.parse(last.result_json ?? '{}').stack ?? 'html'; } catch { /* the copy's own */ }
+    if (made !== stack) return null;
+  }
+  const dir = changeSiteDir(projectId, last.id);
+  if (!(await isDir(dir))) return null;
+  const includes = publishedOn(projectId, recreateId).filter((r) => r.published_at <= last.published_at).map((r) => ({ id: r.id, page: pageOfChange(r) }));
+  return { changeId: last.id, dir, includes };
+}
+
+/**
+ * What a deploy of a change's folder is given (deploy/run.js runDeploy `dir` and `report`): the folder holding `site/`, and a
+ * report naming `site/` as the stack's finished output. Shared by publishing a change and by a Go live deploy.
+ * @param {string} projectId @param {string} changeId @param {string} stack
+ */
+export function changeDeploySource(projectId, changeId, stack) {
+  return {
+    dir: path.dirname(changeSiteDir(projectId, changeId)),
+    report: { stack, outputs: { [stack]: { status: 'ready', dir: 'site', dist: '' } }, pages: [] },
+  };
+}
+
+/**
+ * The published pages a deploy of `recreateId` would take off the live site: those made on the copy the live site was deployed
+ * from, when that is another copy (an older one: a new copy is made from the live site, so it does not have them).
+ * @param {string} projectId @param {string | null} liveRecreateId @param {string | null} recreateId
+ */
+export function droppedChanges(projectId, liveRecreateId, recreateId) {
+  if (!liveRecreateId || !recreateId || liveRecreateId === recreateId) return [];
+  return publishedOn(projectId, liveRecreateId).map((r) => ({ id: r.id, page: pageOfChange(r) }));
 }
 
 /** Hard-links (or copies) every file of `from` into `to`. @param {string} from @param {string} to */

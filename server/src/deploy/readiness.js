@@ -15,11 +15,12 @@ import { STATIC_STACKS } from './bundle.js';
 const EXPLAINED = new Set(['measurement', 'needs-info', 'look', 'own-code', 'impossible']);
 
 /**
- * @param {{ project: any, report: any | null, stack: string, reaudit: any | null, passThrough?: { paths: string[] } | null, formsConnected?: boolean, snapshotAddresses?: string[] }} o
- *   `reaudit` = the latest finished comparison of this copy (its result), or null
+ * @param {{ project: any, report: any | null, stack: string, reaudit: any | null, passThrough?: { paths: string[] } | null, formsConnected?: boolean, snapshotAddresses?: string[], droppedChanges?: { id: string, page: string }[] }} o
+ *   `reaudit` = the latest finished comparison of this copy (its result), or null; `droppedChanges` = pages published from
+ *   Growth OS on the copy the live site runs, which this copy does not have (changes/site.js droppedChanges)
  * @returns {{ ok: boolean, blockers: { id: string, text: string }[], warnings: { id: string, text: string }[] }}
  */
-export function deployReadiness({ project, report, stack, reaudit, passThrough = null, formsConnected = false, snapshotAddresses = [] }) {
+export function deployReadiness({ project, report, stack, reaudit, passThrough = null, formsConnected = false, snapshotAddresses = [], droppedChanges = [] }) {
   const blockers = [];
   const warnings = [];
   if (!report) {
@@ -68,6 +69,12 @@ export function deployReadiness({ project, report, stack, reaudit, passThrough =
   if (unanswered.length) {
     const one = unanswered.length === 1;
     warnings.push({ id: 'app-calls', text: `The copy asks for ${unanswered.slice(0, 3).join(', ')}${unanswered.length > 3 ? ' and more' : ''}, which ${one ? 'belongs' : 'belong'} to the old app. Once your domain points to the copy, ${one ? 'it gets' : 'they get'} no answer unless you save ${one ? 'its' : 'their'} content ("Content from the old server") or pass ${one ? 'it' : 'them'} to the old app ("Logins and data").` });
+  }
+  // Pages Growth OS published on the copy the live site runs: a deploy of another copy does not have them (changes/site.js).
+  if (droppedChanges.length) {
+    const one = droppedChanges.length === 1;
+    const pages = droppedChanges.map((c) => c.page).filter(Boolean);
+    warnings.push({ id: 'changes-dropped', text: `${one ? 'One page' : `${droppedChanges.length} pages`} published from Growth OS (${pages.slice(0, 3).join(', ')}${pages.length > 3 ? ' and more' : ''}) ${one ? 'was' : 'were'} made on the copy the live site runs now, not on this one. ${one ? 'It is' : 'They are'} not in this deploy and will be gone from the live site; Growth OS can send ${one ? 'it' : 'them'} again afterwards.` });
   }
   return { ok: blockers.length === 0, blockers, warnings };
 }
