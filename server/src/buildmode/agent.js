@@ -17,9 +17,12 @@ import { BUILD_STACKS, projectFile } from './stacks.js';
 import { buildProject } from './project.js';
 import { asData } from './context.js';
 import { BUILD_BUDGET, costOf, roundUsd } from './spend.js';
+import { BUILD_PROVIDER } from './claudeCli.js';
+import { missingPages, seedNote } from './seed.js';
 
 // About 3× the largest real run (14 turns, ~39k tokens written, 6 minutes, $0.76); usd: SAS_BUILD_MAX_USD, else $3.
-export const AGENT_LIMITS = { turns: 40, outputTokens: 200000, minutes: 20, usd: BUILD_BUDGET.perBuildUsd, fixRounds: 3, lookReminders: 2, maxTokens: 64000 };
+// qualityRounds: how often a finish is sent back for what audit_site finds worse or failing; pageReminders: for existing pages gone.
+export const AGENT_LIMITS = { turns: 40, outputTokens: 200000, minutes: 20, usd: BUILD_BUDGET.perBuildUsd, fixRounds: 3, lookReminders: 2, qualityRounds: 2, pageReminders: 1, maxTokens: 64000 };
 export const AGENT_EFFORT = 'medium';
 const EDITOR = 'str_replace_based_edit_tool';
 
@@ -71,6 +74,13 @@ export const AGENT_TOOLS = [
   },
 ];
 
+/** The quality tool: the site audit's own fast checks, held against the original site's Check when there is one (quality.js). */
+export const AUDIT_TOOL = {
+  name: 'audit_site',
+  description: 'Runs the checks the site audit uses on every page: search (titles, descriptions, headings, canonical, Open Graph), AI answers (structured data, FAQ markup, llms.txt), site files (sitemap.xml, robots.txt, meta tags), links and accessibility. When the site existed before, each is compared with the original site. Run it after writing the site, fix what it reports, and run it again; finish is refused while anything is worse than the original or fails outright.',
+  input_schema: { type: 'object', properties: {}, additionalProperties: false },
+};
+
 /** The finish tool of a source-only project: no look and no check before it, and the report says what was not tested. */
 const SOURCE_FINISH = {
   ...AGENT_TOOLS[3],
@@ -78,7 +88,9 @@ const SOURCE_FINISH = {
 };
 
 /** The tools the agent gets for a stack: a source-only project has no preview and no checks. */
-export const toolsFor = (/** @type {import('./stacks.js').BuildStack} */ stack) => (stack.sourceOnly ? [AGENT_TOOLS[0], SOURCE_FINISH] : AGENT_TOOLS);
+export const toolsFor = (/** @type {import('./stacks.js').BuildStack} */ stack, { audit = false } = {}) => (stack.sourceOnly
+  ? [AGENT_TOOLS[0], SOURCE_FINISH]
+  : audit ? [...AGENT_TOOLS.slice(0, 3), AUDIT_TOOL, AGENT_TOOLS[3]] : AGENT_TOOLS);
 
 /**
  * The owner's photos and logo as the agent is told about them: where they are, how a page refers to them, their size and the
@@ -107,8 +119,8 @@ export function imagesNote(images, app, sourceOnly = false) {
 }
 
 /** What the agent is told about the folder it works in, beside the composed prompt. */
-export function workspaceNote({ fonts, stack = BUILD_STACKS.html, images = [] }) {
-  if (stack.sourceOnly) return sourceNote({ fonts, stack, images });
+export function workspaceNote({ fonts, stack = BUILD_STACKS.html, images = [], existing = null, audit = false }) {
+  if (stack.sourceOnly) return sourceNote({ fonts, stack, images, existing });
   const app = Boolean(stack.toolchain);
   // An app serves public/ at the site root, so the stylesheet made in public/css/ is /css/fonts.css there.
   const fontsCss = app ? `/${fonts?.css}` : fonts?.css;
@@ -123,24 +135,30 @@ export function workspaceNote({ fonts, stack = BUILD_STACKS.html, images = [] })
     `- ${EDITOR}: view, create, str_replace and insert files in the project folder. Paths are relative to the project root (${paths}).`,
     `- preview_site: ${app ? 'builds the project and opens' : 'opens'} the site in a real browser and shows you screenshots at phone, tablet and computer width, with automatic findings.`,
     `- check_site: ${app ? 'builds the project and runs ' : ''}the safety, link and HTML checks the finished site must pass.`,
+    ...(audit ? [`- audit_site: the site audit's search, AI-answer, site-file, link and accessibility checks of every page${existing ? ', compared with the original site' : ''}. Finish is refused while anything is worse than the original or fails outright.`] : []),
     '- finish: call it once, at the end, with your report.',
     ...(app ? ['There is no shell and no network: you write the files, and the tools build them.'] : []),
     ...stack.note,
     fontLine,
     ...imagesNote(images, app),
+    ...seedNote(existing),
     'Facts: the brief\'s "Facts you may use" come from the owner. Where one fills a bracketed placeholder in the brief (the business name, phone, hours…), use the fact and drop the placeholder.',
     '',
     'How to work:',
-    `1. Write the whole site: every page, the styles and the ${app ? 'components' : 'scripts'}, each file whole with create.`,
+    existing
+      ? `1. Read the existing site first (view the pages, the styles and the ${app ? 'components' : 'scripts'}), then make the brief's changes in those files.`
+      : `1. Write the whole site: every page, the styles and the ${app ? 'components' : 'scripts'}, each file whole with create.`,
     '2. Call preview_site and study every screenshot like the art director of a top studio reviewing a junior\'s work. Fix everything on the visual review list that is not excellent, then look again. Do at least two rounds of looking and fixing; a first draft is never the final site.',
-    '3. When it looks excellent at every size, run check_site and fix anything it reports.',
+    audit
+      ? '3. When it looks excellent at every size, run check_site and audit_site and fix everything they report (search, AI answers, accessibility, links), then run them again.'
+      : '3. When it looks excellent at every size, run check_site and fix anything it reports.',
     '4. Call finish. Write the summary for the owner, who is not a developer.',
     '</workspace>',
   ].join('\n');
 }
 
 /** What the agent is told when the project is written as source only, in a technology this server has no tools for. */
-function sourceNote(/** @type {{ fonts?: any, stack: import('./stacks.js').BuildStack, images?: any[] }} */ { fonts, stack, images = [] }) {
+function sourceNote(/** @type {{ fonts?: any, stack: import('./stacks.js').BuildStack, images?: any[], existing?: any }} */ { fonts, stack, images = [], existing = null }) {
   const fontLine = fonts?.css
     ? `Fonts: ${stack.publicDir}/${fonts.css} already holds the @font-face rules for ${fonts.local.join(' and ')} (the files are in ${stack.publicDir}/fonts/, referenced relative to the stylesheet). Serve assets/ as static files and link that stylesheet before your own, or say in the README where to copy it; use those families by name, each followed by close fallbacks.${fonts.missing.length ? ` ${fonts.missing.join(' and ')} could not be made local: use close system fallbacks.` : ''}`
     : 'Fonts: no font files are available. Name the design\'s families first in each font stack, followed by close system fallbacks.';
@@ -153,10 +171,13 @@ function sourceNote(/** @type {{ fonts?: any, stack: import('./stacks.js').Build
     ...stack.note,
     fontLine,
     ...imagesNote(images, false, true),
+    ...seedNote(existing),
     'Facts: the brief\'s "Facts you may use" come from the owner. Where one fills a bracketed placeholder in the brief (the business name, phone, hours…), use the fact and drop the placeholder.',
     '',
     'How to work:',
-    '1. Write the whole project in that technology\'s standard structure: every page, the layout, the styles, the configuration, the dependency manifest and README.md, each file whole with create.',
+    existing
+      ? '1. Read the existing project first (its configuration, manifest and pages), then make the brief\'s changes in its own structure; add a README.md if it has none.'
+      : '1. Write the whole project in that technology\'s standard structure: every page, the layout, the styles, the configuration, the dependency manifest and README.md, each file whole with create.',
     '2. Read back (view) the configuration, the manifest and one page of each kind, and fix anything that would not run: wrong imports, missing files, names the technology would not find.',
     '3. Call finish. Write the summary for the owner, who is not a developer, and say in not_done that the site was not built or tested on this server.',
     '</workspace>',
@@ -172,6 +193,7 @@ const describeBuild = (/** @type {{ problems: string[] }} */ built) => `The proj
 /** What a tool call is doing, in the owner's words, for the progress list. */
 function describeCall(/** @type {any} */ block) {
   if (block.name === 'check_site') return 'Checking the site';
+  if (block.name === 'audit_site') return 'Running the site audit (search, accessibility, links)';
   if (block.name === 'preview_site') return 'Opening the site in a browser to look at it';
   if (block.name === 'finish') return 'Writing the report';
   const p = typeof block.input?.path === 'string' ? block.input.path.replace(/^\/+/, '') || 'the project' : 'a file';
@@ -186,6 +208,157 @@ export function checkReport(/** @type {any} */ input) {
     .filter((r) => r && typeof r.id === 'string' && REQ_STATUS.includes(r.status))
     .map((r) => ({ id: r.id, status: r.status, note: typeof r.note === 'string' ? r.note : '' }));
   return { summary: input.summary, requirements, placeholders: strings(input.placeholders), notDone: strings(input.not_done) };
+}
+
+/**
+ * The agent's tools, run by this code: the file editor (confined to the project by workspace.js), the look, the checks and the
+ * finish with its rules (look at the latest version first, fix failing checks first). The same for the API loop below and the
+ * CLI loop (agentCli.js), so the agent's reach does not depend on which one drives it.
+ * @param {{ siteDir: string, stack?: import('./stacks.js').BuildStack, lim: typeof AGENT_LIMITS, onEvent?: (e: any) => void, signal?: AbortSignal,
+ *   preview?: typeof previewSite, tmp?: string, build?: typeof buildProject }} o
+ */
+export function createToolbox({ siteDir, stack = BUILD_STACKS.html, lim, onEvent = () => {}, signal, preview = previewSite, tmp = `${siteDir}.tmp`, build = buildProject,
+  existing = null, polish = null, assess = null }) {
+  // existing: the site the project started from (seed.js), whose room and pages the agent keeps; polish: the fix rules run on
+  // the built site before it is judged (builds.js, plain HTML); assess: the quality checks against the original (quality.js).
+  const rules = { writable: stack.writable, writableText: stack.writableText, listed: projectFile, text: stack.text, textText: stack.textText, ...(existing?.room && { limits: existing.room }) };
+  let qualityRounds = 0;
+  let pageReminders = 0;
+  /** @type {any} the last quality check, kept with the report */
+  let quality = null;
+  // The project is built when a look or a check needs it, and again only after a file changed.
+  let version = 0;
+  /** @type {any} */
+  let built = null;
+  let builtVersion = -1;
+  const ensureBuilt = async () => {
+    if (built && builtVersion === version) return built;
+    if (stack.toolchain) onEvent({ type: 'action', text: 'Building the site' });
+    built = await build({ stack, dir: siteDir, tmp, signal });
+    builtVersion = version;
+    if (stack.toolchain && !built.ok) onEvent({ type: 'checks', text: 'The build failed; fixing' });
+    return built;
+  };
+  const siteChecks = async () => {
+    if (stack.sourceOnly) return checkSourceProject(siteDir, (await listFiles(siteDir)).filter(projectFile));
+    const b = await ensureBuilt();
+    return b.ok ? checkBuiltSite(b.out, { app: stack.safety, own: existing?.own ?? null }) : failedBuild(b);
+  };
+  let fixRounds = 0;
+  // The agent must look at its latest version before it finishes: a change after the last look needs another look.
+  let changedSinceLook = false;
+  let looks = 0;
+  let lookReminders = 0;
+
+  /**
+   * One tool call. content: text, or the Messages API's content blocks (a look: text and images).
+   * @param {string} name @param {any} input
+   * @returns {Promise<{ content: string | any[], isError?: boolean, finished?: { report: any, checks: any } }>}
+   */
+  async function call(name, input) {
+    onEvent({ type: 'action', text: describeCall({ name, input }) });
+    if (name === EDITOR) {
+      try {
+        const out = await runEditor(siteDir, input, rules);
+        if (out.changed) {
+          changedSinceLook = true;
+          version++;
+          onEvent({ type: 'file', file: out.changed.path });
+        }
+        return { content: out.text };
+      } catch (err) {
+        if (!(err instanceof ToolError)) throw err;
+        return { content: err.message, isError: true };
+      }
+    }
+    if (stack.sourceOnly && (name === 'preview_site' || name === 'check_site')) {
+      return { content: 'This project is source only: nothing can be built, previewed or checked here. Write the files, then call finish.', isError: true };
+    }
+    if (name === 'preview_site') {
+      const given = input ?? {};
+      const pages = Array.isArray(given.pages) ? given.pages.filter((/** @type {any} */ p) => typeof p === 'string') : undefined;
+      const sizes = Array.isArray(given.sizes) ? given.sizes.filter((/** @type {any} */ x) => typeof x === 'string' && Object.hasOwn(VIEWS, x)) : undefined;
+      const b = await ensureBuilt();
+      if (!b.ok) return { content: describeBuild(b), isError: true };
+      try {
+        const shown = await preview(b.out, { pages, sizes: sizes?.length ? sizes : undefined });
+        looks++;
+        changedSinceLook = false;
+        onEvent({ type: 'checks', text: shown.findings.length ? `Looked at the site: ${shown.findings.length} thing(s) to fix` : 'Looked at the site' });
+        return { content: previewContent(shown) };
+      } catch (err) {
+        return { content: `The browser could not open the site: ${String(/** @type {any} */ (err)?.message ?? err).slice(0, 200)}`, isError: true };
+      }
+    }
+    if (name === 'check_site') {
+      const checks = await siteChecks();
+      onEvent({ type: 'checks', text: checks.ok ? 'Checks passed' : `${checks.issues.length} problem(s) found` });
+      return { content: checks.build === false ? describeBuild({ problems: checks.issues }) : describeChecks(checks) };
+    }
+    if (name === 'audit_site' && assess) {
+      const b = await ensureBuilt();
+      if (!b.ok) return { content: describeBuild(b), isError: true };
+      try {
+        quality = await assess(b.out);
+        onEvent({ type: 'checks', text: quality.ok ? 'Search, accessibility and links: all pass' : `Search, accessibility and links: ${quality.worse.length + quality.failing.length} to fix` });
+        return { content: quality.text };
+      } catch (err) {
+        return { content: `The audit could not run: ${String(/** @type {any} */ (err)?.message ?? err).slice(0, 200)}`, isError: true };
+      }
+    }
+    if (name === 'finish') {
+      const report = checkReport(input);
+      if (!report) return { content: 'The report was incomplete: send summary, requirements, placeholders and not_done.', isError: true };
+      if (!stack.sourceOnly && (changedSinceLook || looks === 0) && lookReminders < lim.lookReminders) {
+        lookReminders++;
+        onEvent({ type: 'checks', text: 'Looking at the latest version before finishing' });
+        return { content: 'You have not looked at your latest version. Call preview_site, fix what is not excellent, then finish.', isError: true };
+      }
+      // An existing site's pages stay unless the brief removed them: asked about once (a plain project, where pages are files).
+      if (existing && !stack.toolchain && pageReminders < (lim.pageReminders ?? 1)) {
+        const gone = await missingPages(siteDir, existing);
+        if (gone.length) {
+          pageReminders++;
+          onEvent({ type: 'checks', text: `${gone.length} page(s) of the existing site are missing` });
+          return { content: `These pages of the existing site are no longer in the project: ${gone.join(', ')}. Keep every existing page unless the brief says to remove it. If removing them was intended, call finish again.`, isError: true };
+        }
+      }
+      // The fix rules the copy of a site gets (titles, descriptions, structured data, alt text, names, sitemap…), before judging.
+      if (polish) {
+        try {
+          const fixed = await polish();
+          if (fixed?.changed) {
+            version++;
+            onEvent({ type: 'checks', text: `Applied ${fixed.changed} automatic fix(es) for search and accessibility` });
+          }
+        } catch (err) {
+          onEvent({ type: 'checks', text: `Automatic fixes skipped: ${String(/** @type {any} */ (err)?.message ?? err).slice(0, 120)}` });
+        }
+      }
+      const checks = await siteChecks();
+      if (!checks.ok && fixRounds < lim.fixRounds) {
+        fixRounds++;
+        onEvent({ type: 'checks', text: `${checks.issues.length} problem(s) left; fixing` });
+        return { content: checks.build === false ? describeBuild({ problems: checks.issues }) : describeChecks(checks), isError: true };
+      }
+      if (assess && checks.ok) {
+        try {
+          const b = await ensureBuilt();
+          quality = await assess(b.out, { gate: true });
+          if (!quality.ok && qualityRounds < (lim.qualityRounds ?? 2)) {
+            qualityRounds++;
+            onEvent({ type: 'checks', text: `${quality.worse.length + quality.failing.length} search / accessibility problem(s) left; fixing` });
+            return { content: quality.text, isError: true };
+          }
+        } catch (err) {
+          onEvent({ type: 'checks', text: `Quality check skipped: ${String(/** @type {any} */ (err)?.message ?? err).slice(0, 120)}` });
+        }
+      }
+      return { content: 'Report received.', finished: { report, checks, quality } };
+    }
+    return { content: `Unknown tool ${name}.`, isError: true };
+  }
+  return { call, siteChecks };
 }
 
 const addUsage = (/** @type {any} */ total, /** @type {any} */ u) => {
@@ -205,8 +378,13 @@ const addUsage = (/** @type {any} */ total, /** @type {any} */ u) => {
  * @returns {Promise<{ report: any, checks: any, turns: number, usage: any, costUsd: number, model: string }>}
  */
 export async function runAgent({ prompt, siteDir, fonts, images = [], client, model = BUILD_MODEL, onEvent = () => {}, signal, limits = {}, preview = previewSite,
-  stack = BUILD_STACKS.html, tmp = `${siteDir}.tmp`, build = buildProject }) {
+  stack = BUILD_STACKS.html, tmp = `${siteDir}.tmp`, build = buildProject, existing = null, polish = null, assess = null }) {
   const lim = { ...AGENT_LIMITS, ...limits };
+  // SAS_BUILD_PROVIDER=cli: the same tools, driven by the Claude Code CLI on the local subscription (agentCli.js).
+  if (!client && BUILD_PROVIDER === 'cli') {
+    const { runAgentCli } = await import('./agentCli.js');
+    return runAgentCli({ prompt, siteDir, fonts, images, model, onEvent, signal, lim, preview, stack, tmp, build, existing, polish, assess });
+  }
   const Anthropic = await loadSdk();
   let api;
   try {
@@ -220,33 +398,11 @@ export async function runAgent({ prompt, siteDir, fonts, images = [], client, mo
   let cost = 0;
   const first = prompt.messages[0];
   /** @type {any[]} */
-  const messages = [{ ...first, content: [...first.content, { type: 'text', text: workspaceNote({ fonts, stack, images }) }] }, ...prompt.messages.slice(1)];
-  const rules = { writable: stack.writable, writableText: stack.writableText, listed: projectFile, text: stack.text, textText: stack.textText };
-  // The project is built when a look or a check needs it, and again only after a file changed.
-  let version = 0;
-  let built = null;
-  let builtVersion = -1;
-  const ensureBuilt = async () => {
-    if (built && builtVersion === version) return built;
-    if (stack.toolchain) onEvent({ type: 'action', text: 'Building the site' });
-    built = await build({ stack, dir: siteDir, tmp, signal });
-    builtVersion = version;
-    if (stack.toolchain && !built.ok) onEvent({ type: 'checks', text: 'The build failed; fixing' });
-    return built;
-  };
-  const siteChecks = async () => {
-    if (stack.sourceOnly) return checkSourceProject(siteDir, (await listFiles(siteDir)).filter(projectFile));
-    const b = await ensureBuilt();
-    return b.ok ? checkBuiltSite(b.out, { app: stack.safety }) : failedBuild(b);
-  };
+  const messages = [{ ...first, content: [...first.content, { type: 'text', text: workspaceNote({ fonts, stack, images, existing, audit: Boolean(assess) }) }] }, ...prompt.messages.slice(1)];
+  const toolbox = createToolbox({ siteDir, stack, lim, onEvent, signal, preview, tmp, build, existing, polish, assess });
   let turns = 0;
-  let fixRounds = 0;
   let nudged = false;
   let jsonRetries = 0;
-  // The agent must look at its latest version before it finishes: a change after the last look needs another look.
-  let changedSinceLook = false;
-  let looks = 0;
-  let lookReminders = 0;
 
   while (true) {
     if (signal?.aborted) throw new LlmError('The build was stopped.', 499, 'stopped');
@@ -267,7 +423,7 @@ export async function runAgent({ prompt, siteDir, fonts, images = [], client, mo
         output_config: { effort: AGENT_EFFORT },
         cache_control: { type: 'ephemeral' },
         system: prompt.system,
-        tools: toolsFor(stack),
+        tools: toolsFor(stack, { audit: Boolean(assess) }),
         messages,
       }, { signal }).finalMessage();
       jsonRetries = 0;
@@ -301,7 +457,7 @@ export async function runAgent({ prompt, siteDir, fonts, images = [], client, mo
         messages.push({ role: 'user', content: [{ type: 'text', text: 'Continue until the site is complete, run check_site, then call finish.' }] });
         continue;
       }
-      const checks = await siteChecks();
+      const checks = await toolbox.siteChecks();
       return { report: null, checks, turns, usage, costUsd: roundUsd(cost), model: message.model ?? model };
     }
 
@@ -309,68 +465,9 @@ export async function runAgent({ prompt, siteDir, fonts, images = [], client, mo
     const results = [];
     let finished = null;
     for (const call of calls) {
-      onEvent({ type: 'action', text: describeCall(call) });
-      if (call.name === EDITOR) {
-        try {
-          const out = await runEditor(siteDir, call.input, rules);
-          if (out.changed) {
-            changedSinceLook = true;
-            version++;
-            onEvent({ type: 'file', file: out.changed.path });
-          }
-          results.push({ type: 'tool_result', tool_use_id: call.id, content: out.text });
-        } catch (err) {
-          if (!(err instanceof ToolError)) throw err;
-          results.push({ type: 'tool_result', tool_use_id: call.id, content: err.message, is_error: true });
-        }
-      } else if (stack.sourceOnly && (call.name === 'preview_site' || call.name === 'check_site')) {
-        results.push({ type: 'tool_result', tool_use_id: call.id, content: 'This project is source only: nothing can be built, previewed or checked here. Write the files, then call finish.', is_error: true });
-      } else if (call.name === 'preview_site') {
-        const input = call.input ?? {};
-        const pages = Array.isArray(input.pages) ? input.pages.filter((p) => typeof p === 'string') : undefined;
-        const sizes = Array.isArray(input.sizes) ? input.sizes.filter((x) => typeof x === 'string' && Object.hasOwn(VIEWS, x)) : undefined;
-        const b = await ensureBuilt();
-        if (!b.ok) {
-          results.push({ type: 'tool_result', tool_use_id: call.id, content: describeBuild(b), is_error: true });
-          continue;
-        }
-        try {
-          const shown = await preview(b.out, { pages, sizes: sizes?.length ? sizes : undefined });
-          looks++;
-          changedSinceLook = false;
-          onEvent({ type: 'checks', text: shown.findings.length ? `Looked at the site: ${shown.findings.length} thing(s) to fix` : 'Looked at the site' });
-          results.push({ type: 'tool_result', tool_use_id: call.id, content: previewContent(shown) });
-        } catch (err) {
-          results.push({ type: 'tool_result', tool_use_id: call.id, content: `The browser could not open the site: ${String(err?.message ?? err).slice(0, 200)}`, is_error: true });
-        }
-      } else if (call.name === 'check_site') {
-        const checks = await siteChecks();
-        onEvent({ type: 'checks', text: checks.ok ? 'Checks passed' : `${checks.issues.length} problem(s) found` });
-        results.push({ type: 'tool_result', tool_use_id: call.id, content: checks.build === false ? describeBuild({ problems: checks.issues }) : describeChecks(checks) });
-      } else if (call.name === 'finish') {
-        const report = checkReport(call.input);
-        if (!report) {
-          results.push({ type: 'tool_result', tool_use_id: call.id, content: 'The report was incomplete: send summary, requirements, placeholders and not_done.', is_error: true });
-          continue;
-        }
-        if (!stack.sourceOnly && (changedSinceLook || looks === 0) && lookReminders < lim.lookReminders) {
-          lookReminders++;
-          onEvent({ type: 'checks', text: 'Looking at the latest version before finishing' });
-          results.push({ type: 'tool_result', tool_use_id: call.id, content: 'You have not looked at your latest version. Call preview_site, fix what is not excellent, then finish.', is_error: true });
-          continue;
-        }
-        const checks = await siteChecks();
-        if (!checks.ok && fixRounds < lim.fixRounds) {
-          fixRounds++;
-          onEvent({ type: 'checks', text: `${checks.issues.length} problem(s) left; fixing` });
-          results.push({ type: 'tool_result', tool_use_id: call.id, content: checks.build === false ? describeBuild({ problems: checks.issues }) : describeChecks(checks), is_error: true });
-          continue;
-        }
-        finished = { report, checks };
-        results.push({ type: 'tool_result', tool_use_id: call.id, content: 'Report received.' });
-      } else {
-        results.push({ type: 'tool_result', tool_use_id: call.id, content: `Unknown tool ${call.name}.`, is_error: true });
-      }
+      const out = await toolbox.call(call.name, call.input);
+      if (out.finished) finished = out.finished;
+      results.push({ type: 'tool_result', tool_use_id: call.id, content: out.content, ...(out.isError && { is_error: true }) });
     }
     if (finished) {
       const files = await listFiles(siteDir);

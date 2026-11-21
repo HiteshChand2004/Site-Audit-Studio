@@ -41,6 +41,10 @@ import { listFiles } from '../buildmode/workspace.js';
 import { IMAGE_LIMITS, ImageError, addImage, listImages, removeImage, resolveImages, thumbnailOf } from '../buildmode/images.js';
 import { writeZip } from '../recreate/export/zip.js';
 import { fontPreviewRouter } from '../buildmode/fontPreview.js';
+import { existsSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+import { recreateRoot } from '../config/paths.js';
+import { reportOutputs } from '../recreate/export/fromIr.js';
 
 const router = Router();
 
@@ -58,6 +62,49 @@ const projectLoader = (/** @type {any} */ req) => (/** @type {string} */ id) => 
   if (accountsEnabled() && (!req.user || project.owner_id !== req.user.id)) return null;
   const row = /** @type {any} */ (latestAudit.get(id));
   return { project, audit: row ? JSON.parse(row.result_json) : null };
+};
+
+// SELECT *: owner_id exists only once accounts are set up.
+const allProjects = db.prepare('SELECT * FROM projects ORDER BY created_at DESC');
+const latestCopies = db.prepare(`
+  SELECT id, finished_at FROM recreates
+  WHERE project_id = ? AND status = 'done' AND removed_at IS NULL
+  ORDER BY started_at DESC LIMIT 5
+`);
+const hostOf = (/** @type {string} */ u) => {
+  try {
+    return new URL(u).hostname.replace(/^www\./, '').toLowerCase();
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * The website in this app a build names (buildmode/context.js KnownSite): by id, else by its address; the signed-in account's
+ * only. Its latest Check is the build's baseline; its latest finished copy in the stack, the build's starting point.
+ */
+const siteFinder = (/** @type {any} */ req) => async (/** @type {{ url?: string, projectId?: string }} */ { url, projectId }, /** @type {string} */ stack) => {
+  const mine = (/** @type {any} */ p) => !accountsEnabled() || (req.user && p.owner_id === req.user.id);
+  let project;
+  if (projectId) {
+    project = /** @type {any} */ (selectProject.get(projectId));
+  } else {
+    const host = url ? hostOf(url) : null;
+    project = host ? /** @type {any[]} */ (allProjects.all()).find((p) => mine(p) && hostOf(p.url) === host) : null;
+  }
+  if (!project || !mine(project)) return null;
+  const row = /** @type {any} */ (latestAudit.get(project.id));
+  const audit = row ? JSON.parse(row.result_json) : null;
+  let copy = null;
+  for (const c of /** @type {any[]} */ (latestCopies.all(project.id))) {
+    const dir = path.join(recreateRoot(project.id), c.id);
+    const report = await readFile(path.join(dir, 'report.json'), 'utf8').then(JSON.parse, () => null);
+    const out = report ? reportOutputs(report)[stack] : null;
+    if (!out || out.status !== 'ready' || !out.dir || !existsSync(path.join(dir, out.dir))) continue;
+    copy = { dir: path.join(dir, out.dir), recreateId: c.id, copiedAt: c.finished_at ?? null, pages: out.pages?.length ?? 0 };
+    break;
+  }
+  return { projectId: project.id, url: project.url, audit, copy };
 };
 
 /** Errors of build mode carry the status to answer with; anything else is a server error. */
@@ -78,7 +125,7 @@ router.get('/modules', (_req, res) => {
 
 router.post('/plan', async (req, res, next) => {
   try {
-    res.json(await planBuild(req.body ?? {}, { loadProject: projectLoader(req), ownerId: ownerOf(req) }));
+    res.json(await planBuild(req.body ?? {}, { loadProject: projectLoader(req), findSite: siteFinder(req), ownerId: ownerOf(req) }));
   } catch (err) {
     answerError(err, res, next);
   }
@@ -86,7 +133,7 @@ router.post('/plan', async (req, res, next) => {
 
 router.post('/compose', async (req, res, next) => {
   try {
-    res.json(await composeBuild(req.body ?? {}, { loadProject: projectLoader(req) }));
+    res.json(await composeBuild(req.body ?? {}, { loadProject: projectLoader(req), findSite: siteFinder(req) }));
   } catch (err) {
     answerError(err, res, next);
   }
@@ -99,7 +146,7 @@ router.post('/runs', async (req, res, next) => {
     if (siteId != null && (typeof siteId !== 'string' || !(await getSite(siteId, ownerId)))) return res.status(404).json({ error: 'Saved site not found.' });
     // The owner's photos and logo come from the saved site only: ids the site does not have are left out.
     const images = siteId ? await resolveImages(siteId, ownerId, request.images) : [];
-    const run = await startBuild(request, { ownerId, images, deps: { loadProject: projectLoader(req) } });
+    const run = await startBuild(request, { ownerId, images, deps: { loadProject: projectLoader(req), findSite: siteFinder(req) } });
     if (siteId) await attachRun(siteId, ownerId, run.id);
     res.status(202).json(run);
   } catch (err) {
@@ -142,8 +189,10 @@ router.get('/runs/:id/download', async (req, res, next) => {
     const dir = siteDirOf(run.id);
     // The project as the owner gets it: what the build links in or caches is not part of it; the built site (dist/, out/,
     // build/, client/dist/) is. A source-only project is its source.
-    const { out } = stackOf(run);
-    const files = (await listFiles(dir)).filter((f) => projectFile(f) || (out && f.startsWith(`${out}/`)));
+    // A plain site is its files as served: a vendor/ folder there is the site's own libraries (an existing site's copy), not packages.
+    const { out, toolchain, sourceOnly } = stackOf(run);
+    const served = (/** @type {string} */ f) => !toolchain && !sourceOnly && !/(^|\/)node_modules(\/|$)/.test(f);
+    const files = (await listFiles(dir)).filter((f) => projectFile(f) || served(f) || (out && f.startsWith(`${out}/`)));
     const name = `site-${run.id.slice(0, 8)}`;
     res.set({ 'Content-Type': 'application/zip', 'Content-Disposition': `attachment; filename="${name}.zip"`, 'Cache-Control': 'no-store' });
     await writeZip({ entries: files.map((f) => ({ name: `${name}/${f}`, file: path.join(dir, f), store: /\.woff2$/.test(f) })) }, res);

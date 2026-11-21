@@ -25,5 +25,10 @@
     "framer-motion": "13.4.6",
     "motion-dom": "13.4.5",
     "motion-utils": "13.3.0"
+  },
+  "allowScripts": {
+    "esbuild@0.25.12": true,
+    "sharp@0.34.5": true,
+    "ssh2@1.17.0": true
   }
 }
