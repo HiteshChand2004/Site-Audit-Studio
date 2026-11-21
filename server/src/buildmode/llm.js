@@ -2,6 +2,8 @@
 // The one place build mode talks to Claude. Every call asks for structured output (a JSON schema the API enforces), streams so a
 // long brief never hits a request timeout, and opts into the server-side refusal fallback. Tests pass their own `client`.
 // Credentials: ANTHROPIC_API_KEY (server/.env) or any source the SDK resolves; none = a 503 that says so, never a crash.
+// SAS_BUILD_PROVIDER=cli runs the same calls through the Claude Code CLI on the local subscription instead (claudeCli.js).
+import { BUILD_PROVIDER, createCliLlm } from './claudeCli.js';
 
 export const BUILD_MODEL = (process.env.SAS_BUILD_MODEL ?? '').trim() || 'claude-sonnet-5-5';
 export const FALLBACK_BETA = 'server-side-fallback-2026-07-01';
@@ -50,6 +52,7 @@ export function explainError(err, Anthropic) {
  * @returns {Llm}
  */
 export function createLlm({ client, model = BUILD_MODEL } = {}) {
+  if (!client && BUILD_PROVIDER === 'cli') return createCliLlm({ model });
   /** @type {any} */
   let instance = client ?? null;
   return {

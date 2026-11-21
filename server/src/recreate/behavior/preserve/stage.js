@@ -1300,7 +1300,9 @@ export async function asIsStage(ctx) {
       fixedSeen.add(page);
       return `Checking that the fixes leave ${page} looking the same (page ${fixedSeen.size} of ${pages.length})`;
     };
-    report.fixes = await fixAndProve({
+    // liftOnly (Build mode, buildmode/capture.js): the copy is a starting point the build changes and measures itself, so the
+    // fixes and their proof are left to it.
+    report.fixes = ctx.asIs?.liftOnly ? null : await fixAndProve({
       browser, copyDir, gateDir: path.join(ctx.dir, ASIS_DIR, 'unfixed'), pages, siteUrl, progress,
       newSiteUrl: address.origin, addressSkipped: address.skipped, fetchLlms: fetchLlmsTxt,
       log: (m) => {
@@ -1353,6 +1355,19 @@ export async function asIsStage(ctx) {
     }] : [];
     // What a visitor downloads: a converted copy ships the pages it was converted from (their runtime taken out where proven).
     report.javascript = await javascriptOf(converted && report.convert.runtime?.removedPages ? path.join(path.dirname(copyDir), 'convert-source') : copyDir);
+
+    // liftOnly (Build mode): captured, lifted and packaged is all the build needs; the checks, Lighthouse and the comparison
+    // after it are the build's own (buildmode/quality.js). Not checked here, so not called safe: the build runs its own checks.
+    if (ctx.asIs?.liftOnly) {
+      report.liftOnly = true;
+      report.safety = { safe: false, unchecked: true, original: [], why: 'made as the starting point of a build, not checked as a copy' };
+      report.timings = clock.done();
+      ctx.report.asIs = report;
+      ctx.report.outputs[stack] = { status: 'ready', dir: path.join('stacks', stack), dist: servedDir(stack, outDir), mode: 'as-is', liftOnly: true, pages: pages.map((p) => ({ outPath: p.outPath, path: localOfOutPath(p.outPath) })) };
+      ctx.report.safety = report.safety;
+      ctx.progress(1, 'The pages are copied for the build');
+      return {};
+    }
 
     ctx.progress(0.55, 'Running the copy and checking it');
     clock.start('checks');

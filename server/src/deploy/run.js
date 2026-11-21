@@ -32,11 +32,12 @@ export const KEEP_RELEASES = 5;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * @param {{ deployment: { id: string }, projectId: string, recreateId: string, report: any, stack: string, token: string | null, ownerKey: string }} o
+ * @param {{ deployment: { id: string }, projectId: string, recreateId: string, report: any, stack: string, token: string | null, ownerKey: string, dir?: string }} o
  *   `ownerKey` SERVER: Remastly's own server (no token); otherwise the Netlify account the token belongs to
+ *   `dir`: the folder `report`'s outputs are read from, when it is not the copy's own (a change made on it: changes/publish.js)
  * @returns {Promise<void>}  never rejects: the outcome is in the row
  */
-export async function runDeploy({ deployment, projectId, recreateId, report, stack, token, ownerKey }) {
+export async function runDeploy({ deployment, projectId, recreateId, report, stack, token, ownerKey, dir = undefined }) {
   const id = deployment.id;
   running.set(id, projectId);
   let zip = null;
@@ -45,7 +46,7 @@ export async function runDeploy({ deployment, projectId, recreateId, report, sta
     const passThrough = await readPassThrough(projectId);
     const snapshot = await snapshotForDeploy(projectId);
     const plan = await planDeploy({
-      dir: recreateDir(projectId, recreateId), report, stack,
+      dir: dir ?? recreateDir(projectId, recreateId), report, stack,
       // The snapshot's rules first: an address it answers is served from it even under a path passed to the old app (/api/*).
       redirects: [snapshot?.redirects, passThrough && redirectsFor(passThrough)].filter(Boolean).join('\n') || null,
       lastRedirects: passThrough && fallbackFor(passThrough),

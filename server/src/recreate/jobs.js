@@ -69,7 +69,8 @@ export const recreateJobs = new JobManager({
     // An as-is copy is its own output: no stack export (that builds a clean rebuild). It is re-audited like any copy, so "got
     // worse" is measured on every copied page, and each such row carries its reason or is marked unexplained (copy/gotWorse.js).
     if (reportOf(job.id)?.asIs) {
-      if (ok) queueReaudit(project.id, job.id);
+      // A lift-only copy (Build mode's starting point) is measured by the build, not compared here.
+      if (ok && !reportOf(job.id)?.asIs?.liftOnly) queueReaudit(project.id, job.id);
       return;
     }
     if (ok && !reportOf(job.id)?.outputs?.[project.stack]) queueStackExport(project, job.id);

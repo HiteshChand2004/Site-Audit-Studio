@@ -30,7 +30,7 @@ const SOURCES = [
 
 // For an existing website: what is read to understand it, and which code the change is made on.
 const CODE_SOURCES = [
-  { id: 'copy', icon: Globe, title: 'Its live site', text: 'Give its address. The site is read, and a clean copy is the starting point.' },
+  { id: 'copy', icon: Globe, title: 'Its live site', text: 'Give its address. Your copy of it in Remastly is the starting point; without one, its pages, images and fonts are copied first.' },
   { id: 'upload', icon: FolderUp, title: 'Upload my code', text: 'Pick your project folder. Only source text files are sent.' },
   { id: 'github', icon: Github, title: 'GitHub repository', text: 'The address of a public repository.' },
 ];
@@ -739,9 +739,9 @@ function ReviewStep({ plan, review, setReview, owner, detailsChanged, onReplanDe
 
 /** Why a plan cannot be built yet (mirrors server/src/buildmode/builds.js unsupported()), or null. */
 const BUILDABLE = [...BUILD_MODE_STACKS.map((s) => s.id), OTHER];
-const buildBlocked = (setup) => (setup.input !== 'scratch'
-  ? 'Building is available for new sites for now; changing an existing site comes next.'
-  : !BUILDABLE.includes(setup.stack) ? `Building is available in ${BUILD_MODE_STACKS.map((s) => s.name).join(', ')}, or as source code in another technology.` : null);
+const buildBlocked = (setup) => (!BUILDABLE.includes(setup.stack)
+  ? `Building is available in ${BUILD_MODE_STACKS.map((s) => s.name).join(', ')}, or as source code in another technology.`
+  : null);
 // Where each app stack's download holds its finished site (server/src/buildmode/stacks.js `out`).
 const BUILT_FOLDER = { nextjs: 'out/', sveltekit: 'build/' };
 
@@ -753,6 +753,56 @@ const elapsed = (from, to) => {
 /** A build in progress, or its result: the live preview, the download, and what is still needed. */
 /** What a build has cost so far, and its limit: "$0.42 of $3.00 spent"; empty for runs from before costs were kept. */
 const costText = (run) => (run.costUsd == null ? '' : `$${run.costUsd.toFixed(2)}${run.costLimitUsd != null ? ` of $${run.costLimitUsd.toFixed(2)}` : ''} spent`);
+
+const DEVICE = { mobile: 'Phone', desktop: 'Computer' };
+
+/**
+ * How the finished site measures, the way the Check measures any site (server buildmode/quality.js), against the original when
+ * the build started from an existing site; what it started from, and pages of that site no longer in it.
+ */
+function BuildQuality({ run }) {
+  const q = run.quality;
+  const from = run.startedFrom;
+  if (!q && !from && !run.removedPages?.length) return null;
+  const rows = (list) => <ul className={styles.list}>{list.map((c, i) => <li key={`${c.area}-${c.title}-${i}`}><strong>{c.title}</strong> · {c.detail}{c.before ? ` (the original: ${c.before})` : ''}</li>)}</ul>;
+  return (
+    <Card
+      title="Search, speed and accessibility"
+      sub={from
+        ? `Started from ${from.from} (${plural(from.pages, 'page')}, ${plural(from.files, 'file')}).${q?.compared ? ' Measured the way the Check measures any site, and compared with the original.' : ''}`
+        : 'Measured the way the Check measures any site.'}
+    >
+      {run.removedPages?.length > 0 && (
+        <Alert tone="warn" title="Pages of your site that are no longer in it">{run.removedPages.join(', ')}</Alert>
+      )}
+      {q?.error && <p className={styles.note}>The finished site could not be measured: {q.error}</p>}
+      {q?.scores?.length > 0 && (
+        <ul className={styles.list}>
+          {['mobile', 'desktop'].map((d) => {
+            const s = q.scores.filter((x) => x.device === d);
+            if (!s.length) return null;
+            return <li key={d}><strong>{DEVICE[d]}</strong> · {s.map((x) => `${x.area} ${x.before != null ? `${x.before} → ` : ''}${x.after}${x.worse ? ' (lower)' : ''}`).join(' · ')}</li>;
+          })}
+        </ul>
+      )}
+      {q?.worse?.length > 0 && <Alert tone="warn" title={`${plural(q.worse.length, 'check')} worse than the original`}>{rows(q.worse)}</Alert>}
+      {q?.failing?.length > 0 && <Alert tone="warn" title={`${plural(q.failing.length, 'check')} still failing`}>{rows(q.failing)}</Alert>}
+      {q && !q.error && (
+        <p className={styles.note}>
+          {q.compared ? `${plural(q.fixed, 'problem')} of the original fixed. ` : ''}
+          {q.worse?.length || q.failing?.length ? '' : 'Nothing is worse than before and no check fails. '}
+          {q.open ? `${plural(q.open, 'warning')} left to look at.` : ''}
+        </p>
+      )}
+      {q?.fixedList?.length > 0 && (
+        <details>
+          <summary>What was fixed</summary>
+          <ul className={styles.list}>{q.fixedList.map((c, i) => <li key={`${c.title}-${i}`}><strong>{c.title}</strong> · was: {c.detail}</li>)}</ul>
+        </details>
+      )}
+    </Card>
+  );
+}
 
 function BuildRun({ run: given, onStop, onRetry }) {
   // A change made after the build (components/build) comes back as the run: the newer of the two is shown.
@@ -832,6 +882,7 @@ function BuildRun({ run: given, onStop, onRetry }) {
           <ul className={styles.list}>{report.notDone.map((p) => <li key={p}>{p}</li>)}</ul>
         </Card>
       )}
+      {!running && <BuildQuality run={run} />}
 
       {!running && (report || run.checks || run.files.length > 0) && (
         <ForDevelopers>

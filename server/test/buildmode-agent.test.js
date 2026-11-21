@@ -179,7 +179,10 @@ test('the report, the fonts, the workspace note and what can be built', async ()
   assert.equal(unsupported({ input: { kind: 'scratch' }, stack: 'mern' }), null);
   for (const stack of ['vue-vite', 'astro', 'sveltekit', 'other']) assert.equal(unsupported({ input: { kind: 'scratch' }, stack }), null, stack);
   assert.match(unsupported({ input: { kind: 'scratch' }, stack: 'cobol' }), /Plain HTML \/ CSS \/ JS, React \+ Vite, Next\.js, MERN, Vue \+ Vite, Astro, SvelteKit, or as source code/);
-  assert.match(unsupported({ input: { kind: 'url', url: 'x' } }), /new sites/);
+  // An existing site can be built: its live address or its code (the stack is the one its plan settled on).
+  assert.equal(unsupported({ input: { kind: 'url', url: 'x' } }), null);
+  assert.equal(unsupported({ input: { kind: 'source', files: [] } }), null);
+  assert.match(unsupported({ input: { kind: 'nope' } }), /where the site comes from/);
   const empty = tempSite();
   assert.match((await checkBuiltSite(empty)).issues.join(), /index\.html is missing/);
 });

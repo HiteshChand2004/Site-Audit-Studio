@@ -194,7 +194,39 @@ async function liveSiteOf(input, readSite) {
  *   stacks: the stacks the library has modules for; loadProject: reads a project and its latest finished analysis.
  * @returns {Promise<{ input: string, stack: string, stackName?: string, stackSource: string, text: string, site: object }>}
  */
-export async function buildContext({ input, stack, stackName, stacks, loadProject, fetchGithub = fetchGithubRepo, readSite = readLiveSite }) {
+export async function buildContext({ input, stack, stackName, stacks, loadProject, fetchGithub = fetchGithubRepo, readSite = readLiveSite, findSite = null }) {
+  const ctx = await contextOf({ input, stack, stackName, stacks, loadProject, fetchGithub, readSite, findSite });
+  // What the build starts from and is measured against (seed.js, quality.js): kept off the JSON the plan answers with.
+  Object.defineProperty(ctx, 'seed', { value: ctx.seedOf ?? null, enumerable: false });
+  Object.defineProperty(ctx, 'baseline', { value: ctx.baselineOf ?? null, enumerable: false });
+  delete ctx.seedOf;
+  delete ctx.baselineOf;
+  return ctx;
+}
+
+/**
+ * The site in this app a request names (findSite, from the route): the website with that address or id, its latest Check
+ * (the baseline a build is measured against) and its latest finished copy in the stack (the build's starting point).
+ * @typedef {{ projectId: string, url: string, audit: any, copy: { dir: string, recreateId: string, copiedAt: string | null, pages: number } | null }} KnownSite
+ */
+
+/** The audit block of the prompt, when the site was checked in this app. */
+const auditBlock = (/** @type {any} */ audit) => (audit && !audit.isDummy ? `\n<audit>\n${asData(summarizeAudit(audit))}\n</audit>` : '');
+
+/** How the work starts on an existing live site: from this app's copy of it, or from one the build makes first. */
+function startNote(/** @type {KnownSite | null} */ known, /** @type {string} */ stack) {
+  return known?.copy
+    ? `The work starts from the clean ${stack} copy of this site this tool made${known.copy.copiedAt ? ` (${known.copy.copiedAt.slice(0, 10)})` : ''}: its pages, images and fonts are already in the project folder.`
+    : `The build first copies this site's pages, images and fonts into the project folder with this tool, and the work starts from that copy.`;
+}
+
+/** The seed of a live site: this app's copy in the stack, else a capture the build makes (builds.js). */
+const liveSeed = (/** @type {KnownSite | null} */ known, /** @type {string} */ url, /** @type {string} */ stack) => (known?.copy
+  ? { kind: 'copy', dir: known.copy.dir, from: 'the copy of this site made in this app', copiedAt: known.copy.copiedAt }
+  : { kind: 'capture', url, projectId: known?.projectId ?? null, stack });
+
+/** @param {any} o */
+async function contextOf({ input, stack, stackName, stacks, loadProject, fetchGithub, readSite, findSite }) {
   const kind = input?.kind;
   if (!INPUTS.includes(kind)) throw new ContextError(`input.kind must be one of: ${INPUTS.join(', ')}.`);
   if (stack != null && !stacks.includes(stack)) throw new ContextError(`stack must be one of: ${stacks.join(', ')}.`);
@@ -225,12 +257,15 @@ export async function buildContext({ input, stack, stackName, stacks, loadProjec
     const chosen = stack ?? kept.stack;
     const nameKept = named ?? kept?.stackName ?? null;
     const changeNote = kept ? ` Keep its current technology: ${kept.note}` : live.platform ? ` It runs on ${asData(live.platform.name)} today; the owner chose to move it to ${asData(nameOf(chosen, nameKept))}.` : '';
+    const known = findSite ? await findSite({ url: live.url }, chosen) : null;
     return {
       input: kind, stack: chosen, ...(nameKept && { stackName: nameKept }), stackSource: stack ? 'chosen' : 'kept',
-      site: { url: live.url, pagesRead: live.pages, platform: live.platform, ...(kept && { keptNote: kept.note }) },
+      site: { url: live.url, pagesRead: live.pages, platform: live.platform, ...(kept && { keptNote: kept.note }), ...(known && { projectId: known.projectId, copied: Boolean(known.copy) }) },
       text: `<project>\nThis website already exists and is live at ${asData(live.url)}. Study what it is today in <site_content> (read from the live site by this tool) before planning or changing anything: its pages, content, facts, menu and brand.${changeNote} ${chosen === OTHER_STACK
         ? `It is rebuilt in ${asData(nameOf(chosen, nameKept))}, with the live site as the reference for its content, structure and brand.`
-        : `The work starts from a clean ${chosen} copy of this site made by this tool.`}\n</project>\n<site_content>\n${asData(live.text)}\n</site_content>`,
+        : startNote(known, chosen)}\n</project>\n<site_content>\n${asData(live.text)}\n</site_content>${auditBlock(known?.audit)}`,
+      seedOf: chosen === OTHER_STACK ? null : liveSeed(known, live.url, chosen),
+      baselineOf: { audit: known?.audit && !known.audit.isDummy ? known.audit : null, url: live.url, projectId: known?.projectId ?? null },
     };
   }
 
@@ -240,9 +275,12 @@ export async function buildContext({ input, stack, stackName, stacks, loadProjec
     if (!found) throw new ContextError('Website not found.', 404);
     if (!found.audit || found.audit.isDummy) throw new ContextError('Check this website first: build mode works from its latest check.', 409);
     const chosen = stack ?? found.project.stack ?? 'html';
+    const known = findSite ? await findSite({ projectId: found.project.id }, chosen) : null;
     return {
-      input: kind, stack: chosen, ...(named && { stackName: named }), stackSource: stack ? 'chosen' : 'project', site: { projectId: found.project.id, url: found.audit.url, name: found.project.name },
-      text: `<project>\nAn existing live site, ${named ? `rebuilt in ${asData(nameOf(chosen, named))} with its audit and content as the reference` : `copied into a clean ${chosen} project by this tool`}.\n</project>\n<audit>\n${asData(summarizeAudit(found.audit))}\n</audit>`,
+      input: kind, stack: chosen, ...(named && { stackName: named }), stackSource: stack ? 'chosen' : 'project', site: { projectId: found.project.id, url: found.audit.url, name: found.project.name, copied: Boolean(known?.copy) },
+      text: `<project>\nAn existing live site, ${named ? `rebuilt in ${asData(nameOf(chosen, named))} with its audit and content as the reference` : startNote(known, chosen)}.\n</project>\n<audit>\n${asData(summarizeAudit(found.audit))}\n</audit>`,
+      seedOf: named ? null : liveSeed(known, found.audit.url ?? found.project.url, chosen),
+      baselineOf: { audit: found.audit, url: found.audit.url ?? found.project.url, projectId: found.project.id },
     };
   }
 
@@ -279,8 +317,13 @@ export async function buildContext({ input, stack, stackName, stacks, loadProjec
   const pkg = files.find((f) => f.path === 'package.json');
   const tree = files.map((f) => `${f.path} (${Buffer.byteLength(f.content)} B)`).sort().join('\n');
   const from = origin.github ? `from the GitHub repository ${origin.github}${origin.ref ? ` (${origin.ref})` : ''}` : 'uploaded by the owner';
-  const audit = found?.audit && !found.audit.isDummy ? `\n<audit>\n${asData(summarizeAudit(found.audit))}\n</audit>` : '';
+  // The website in this app the code belongs to (by id, else by the live address): its Check is the baseline.
+  const inApp = findSite && (found || live) ? await findSite(found ? { projectId: found.project.id } : { url: live?.url }, chosen) : null;
+  const baseAudit = found?.audit && !found.audit.isDummy ? found.audit : inApp?.audit && !inApp.audit.isDummy ? inApp.audit : null;
+  const audit = auditBlock(baseAudit);
   return {
+    seedOf: { kind: 'files', files, from: origin.github ? `the GitHub repository ${origin.github}` : 'your uploaded code' },
+    baselineOf: { audit: baseAudit, url: live?.url ?? found?.project.url ?? null, projectId: found?.project.id ?? inApp?.projectId ?? null },
     input: kind,
     stack: chosen,
     ...(chosenName && { stackName: chosenName }),
@@ -290,6 +333,6 @@ export async function buildContext({ input, stack, stackName, stacks, loadProjec
       ? `, written in ${asData(current)} today. The owner chose to move it to ${asData(target)}: rebuild it in that technology, keeping its pages, content, features and design unless the brief changes them, and use the existing code as the reference for how everything works.`
       : `, written in ${asData(target)}.`} ${live
       ? `It runs the live site at ${asData(live.url)}: <site_content> is what visitors see there today, read by this tool. Both describe the same site; the code is what you change. Study both before planning or changing anything, and keep what the request does not change.`
-      : 'Study it before planning or changing anything, and keep what the request does not change.'} Read files with the tools before changing them.\n</project>\n<source_code>\nFiles:\n${asData(tree)}${pkg ? `\n\npackage.json:\n${asData(pkg.content)}` : ''}\n</source_code>${live ? `\n<site_content>\n${asData(live.text)}\n</site_content>` : ''}${audit}`,
+      : 'Study it before planning or changing anything, and keep what the request does not change.'} Its files are in the project folder; read them with the tools before changing them.\n</project>\n<source_code>\nFiles:\n${asData(tree)}${pkg ? `\n\npackage.json:\n${asData(pkg.content)}` : ''}\n</source_code>${live ? `\n<site_content>\n${asData(live.text)}\n</site_content>` : ''}${audit}`,
   };
 }

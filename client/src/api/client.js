@@ -323,6 +323,10 @@ export const api = {
   publishBuild: (id) => request(`/build/runs/${id}/publish`, { method: 'POST' }),
   // Go live (server/src/routes/deploy.js): deploys of a finished copy to Remastly's own server, its domain, forms and the rest.
   getServerSetup: () => request('/hosting/server-setup'),
+  // Changes asked by Growth OS (server/src/routes/changes.js): the list, and the person's decision on each.
+  getChanges: (id) => request(`/projects/${id}/changes`),
+  approveChange: (id, changeId) => request(`/projects/${id}/changes/${changeId}/approve`, { method: 'POST', body: {} }),
+  rejectChange: (id, changeId, reason) => request(`/projects/${id}/changes/${changeId}/reject`, { method: 'POST', body: { reason } }),
   getDeploy: (id) => request(`/projects/${id}/deploy`),
   startDeploy: (id, body) => request(`/projects/${id}/deploy`, { method: 'POST', body }),
   restoreDeploy: (id, deploymentId) => request(`/projects/${id}/deploy/${deploymentId}/restore`, { method: 'POST' }),

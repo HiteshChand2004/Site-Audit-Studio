@@ -38,7 +38,12 @@ function checkCss(css, add, where) {
   }
 }
 
+/** A short fingerprint of a script's text or a handler's value, for `sig` below. */
+export const scriptHash = (/** @type {string} */ text) => createHash('sha256').update(String(text).trim()).digest('hex').slice(0, 16);
+
 // An app build (a stack with JavaScript) may run its own framework's bundles (verify/appProfiles.js).
+// Every script element and handler issue carries `sig`: which script it is (its src as written, or the hash of its text; a
+// handler's name and the hash of its value), so a caller can tell a script the site already had from a new one (scanSite allow).
 function checkElements($, nodes, add, { inSvg = false, app = false } = {}) {
   const profile = appProfile(app);
   nodes.each((_, el) => {
@@ -46,9 +51,10 @@ function checkElements($, nodes, add, { inSvg = false, app = false } = {}) {
     const svg = inSvg || tag === 'svg' || $(el).parents('svg').length > 0;
     if (tag === 'script') {
       const type = String(el.attribs.type ?? '').toLowerCase();
+      const sig = el.attribs.src != null ? { kind: 'src', src: String(el.attribs.src) } : { kind: 'inline', hash: scriptHash($(el).text()) };
       if (profile && !svg && profile.scriptAllowed({ src: el.attribs.src, type, text: $(el).text() })) {
         // the framework's own bundle or data
-      } else if (svg || type !== 'application/ld+json') add('script', '<script> element');
+      } else if (svg || type !== 'application/ld+json') add('script', '<script> element', svg ? undefined : sig);
       else if (/<\/script|<!--/i.test($(el).text())) add('script', 'JSON-LD can end its script element');
     }
     if (ACTIVE_TAGS.has(tag)) add('script', `<${el.name}> element`);
@@ -56,7 +62,7 @@ function checkElements($, nodes, add, { inSvg = false, app = false } = {}) {
     if (tag === 'meta' && /refresh/i.test(el.attribs['http-equiv'] ?? '')) add('script', 'meta refresh');
     for (const [name, value] of Object.entries(el.attribs ?? {})) {
       const lname = name.toLowerCase();
-      if (lname.startsWith('on')) add('script', `${name} on <${el.name}>`);
+      if (lname.startsWith('on')) add('script', `${name} on <${el.name}>`, svg ? undefined : { kind: 'on', name: lname, hash: scriptHash(value) });
       else if (lname === 'srcdoc') add('script', `srcdoc on <${el.name}>`);
       else if (SCRIPT_URL.test(compact(value))) add('script', `${name}="${String(value).slice(0, 40)}" on <${el.name}>`);
       else if (svg && tag !== 'a' && (lname === 'href' || lname === 'xlink:href' || lname === 'src') && !localRef(value)) {
@@ -70,7 +76,7 @@ function checkElements($, nodes, add, { inSvg = false, app = false } = {}) {
 /** Checks one file's content; `kind` is html | svg | css. */
 export function checkContent(kind, content, { app = false } = {}) {
   const issues = [];
-  const add = (type, detail) => issues.push({ type, detail });
+  const add = (type, detail, sig) => issues.push(sig ? { type, detail, sig } : { type, detail });
   if (kind === 'css') checkCss(content, add, 'stylesheet');
   else if (kind === 'svg') {
     const $ = load(content, { xml: { xmlMode: true } });
@@ -109,7 +115,12 @@ async function listFiles(dir) {
  * Scans a generated site folder.
  * @returns {Promise<{ safe: boolean, checked: { html: number, svg: number, css: number }, issues: object[] }>}
  */
-export async function scanSite(dir, { app = false, contentChunk = () => false } = {}) {
+/**
+ * allow(file, issue): true for an issue that is not one here (Build mode: a script the existing site already had, unchanged or
+ * moved, buildmode/check.js). Asked before an issue counts; for 'unexpected script file' a true means "a file of the site's
+ * own": it is then sink-scanned like any allowed file, and each sink asked about in turn.
+ */
+export async function scanSite(dir, { app = false, contentChunk = () => false, allow = null } = {}) {
   const profile = appProfile(app);
   const checked = { html: 0, svg: 0, css: 0, ...(app && { js: 0 }) };
   const issues = [];
@@ -135,14 +146,19 @@ export async function scanSite(dir, { app = false, contentChunk = () => false } 
     }
     const allowedFile = typeof profile?.onlyFile === 'function' ? profile.onlyFile(rel) : rel === profile?.onlyFile;
     if (kind === 'js' && profile?.onlyFile && !allowedFile) {
-      if (issues.length < MAX_ISSUES) issues.push({ file: rel, type: 'script', detail: 'unexpected script file' });
-      continue;
+      const unexpected = { type: 'script', detail: 'unexpected script file' };
+      if (!allow?.(rel, unexpected)) {
+        if (issues.length < MAX_ISSUES) issues.push({ file: rel, ...unexpected });
+        continue;
+      }
     }
     const content = await readFile(file, 'utf8');
     // Page and component chunks carry the site's own text; they are covered by the DOM equivalence with the scanned HTML build.
     if (kind === 'js' && (contentChunk(rel) || profile?.contentChunk(rel))) continue;
     for (const issue of kind === 'js' ? checkScript(content, { allow: profile?.jsAllow }) : checkContent(kind, content, { app })) {
-      if (issues.length < MAX_ISSUES) issues.push({ file: rel, ...issue });
+      if (allow?.(rel, issue)) continue;
+      const { sig, ...shown } = /** @type {any} */ (issue);
+      if (issues.length < MAX_ISSUES) issues.push({ file: rel, ...shown });
     }
   }
   return { safe: issues.length === 0, checked, issues };

@@ -31,6 +31,10 @@ import { BUILD_STACKS, buildStack, projectFile, stackUnavailable, writeScaffold 
 import { issuePreviewToken, previewPath, resolvePreviewToken, revokePreviewToken } from '../recreate/previewTokens.js';
 import { forgetPublished, publishedPath, publishedRunIds } from './publish.js';
 import { BUILD_BUDGET, checkDailyBudget, costOf, leftToday, recordSpend, roundUsd } from './spend.js';
+import { changedSince, missingPages, placeSeed } from './seed.js';
+import { captureSite } from './capture.js';
+import { compareQuality, measureSite, qualitySummary, qualityText } from './quality.js';
+import { polishSite } from './polish.js';
 
 export const BUILDS_DIR = path.join(DATA_DIR, 'builds');
 const RETAIN = 10;
@@ -56,8 +60,9 @@ export const siteDirOf = (/** @type {string} */ id) => path.join(runDir(id), 'si
 
 /** What can be built now; null when the request can, else the reason in the owner's words. */
 export function unsupported(/** @type {any} */ request) {
-  if (request?.input?.kind !== 'scratch') return 'Building is available for new sites for now; changing an existing site comes next.';
-  if (!buildStack(request.stack)) return `Building is available in ${Object.values(BUILD_STACKS).filter((st) => !st.sourceOnly).map((st) => st.name).join(', ')}, or as source code in another technology.`;
+  if (!['scratch', 'url', 'source'].includes(request?.input?.kind)) return 'Choose where the site comes from: a new site, its live address, or its code.';
+  // An existing site keeps its technology when none is chosen: the plan's setup decides it (startBuild).
+  if (request.stack != null && !buildStack(request.stack)) return `Building is available in ${Object.values(BUILD_STACKS).filter((st) => !st.sourceOnly).map((st) => st.name).join(', ')}, or as source code in another technology.`;
   return null;
 }
 
@@ -80,6 +85,8 @@ function view(/** @type {any} */ run) {
     activity: run.activity, files: run.files ?? [], turns: run.turns ?? 0, usage: run.usage ?? null, model: run.model ?? null,
     costUsd: run.costUsd ?? null, costLimitUsd: run.costLimitUsd ?? null,
     report: run.report ?? null, checks: run.checks ?? null, error: run.error ?? null, design: run.design ?? null,
+    // An existing site: what the build started from, and its pages no longer there; the finished site against the original.
+    startedFrom: run.startedFrom ?? null, removedPages: run.removedPages ?? [], quality: run.quality ?? null,
     // A lasting address (routes/build.js GET /runs/:id/preview), not the preview token itself: tokens live in this server's
     // memory, so a link kept on an open page or in a list would die with the next restart.
     previewUrl: token ? `/api/build/runs/${run.id}/preview` : null,
@@ -197,14 +204,19 @@ async function redesign(request, deps, ownerId, run) {
 export async function startBuild(request, { ownerId = null, deps = {}, agent = runAgent, fonts = prepareFonts, images = [] } = {}) {
   const reason = unsupported(request);
   if (reason) throw new BuildError(reason, 422);
-  const stack = /** @type {import('./stacks.js').BuildStack} */ (buildStack(request.stack));
-  const unavailable = await stackUnavailable(stack);
-  if (unavailable) throw new BuildError(unavailable, 422);
   if ([...runs.values()].some((r) => r.status === 'running')) throw new BuildError('Another site is being built on this server. Try again when it has finished.', 409);
   await checkDailyBudget(ownerId);
   const costLimitUsd = Math.min(BUILD_BUDGET.perBuildUsd, await leftToday(ownerId));
   // The prompt is composed here, from the plan: never taken from the client.
   let composed = await composeBuild(request, deps);
+  // The stack the plan settled on: the one chosen, else the one an existing site's code or platform is in.
+  const stack = buildStack(composed.setup.stack ?? request.stack);
+  if (!stack) throw new BuildError(`Building is available in ${Object.values(BUILD_STACKS).filter((st) => !st.sourceOnly).map((st) => st.name).join(', ')}, or as source code in another technology.`, 422);
+  const unavailable = await stackUnavailable(stack);
+  if (unavailable) throw new BuildError(unavailable, 422);
+  // What the project starts from (seed.js) and the original's Check it is measured against (quality.js).
+  const seed = /** @type {any} */ (composed).seed ?? null;
+  const baseline = /** @type {any} */ (composed).baseline ?? null;
   // Decided before answering, so two clicks on "Build again" cannot both count as the first build.
   const repeat = await (deps.claimBuild ?? claimBuild)({ direction: composed.prompt.direction, ownerId }).catch(() => false);
   const id = randomUUID();
@@ -225,6 +237,19 @@ export async function startBuild(request, { ownerId = null, deps = {}, agent = r
 
   /** @type {{ path: string }[]} the owner's images as placed in the project */
   let placed = [];
+  /** @type {Awaited<ReturnType<typeof placeSeed>>} the existing site as placed in the project */
+  let seeded = null;
+  // The original's Check (quality.js compares the built site with it); none for a new site, or a site never checked.
+  /** @type {any} */
+  let baseAudit = baseline?.audit && !baseline.audit.isDummy ? baseline.audit : null;
+  const scripts = stack.inlineBoot ? 'inline' : true;
+  // The site audit's fast checks against the original, for the agent (audit_site and the gate before it may finish).
+  const assess = stack.sourceOnly ? null : async (/** @type {string} */ dir, { gate = false } = {}) => {
+    const q = compareQuality(await measureSite({ dir, scripts, signal: run.controller.signal }), baseAudit);
+    return { ...q, text: qualityText(q, { gate }) };
+  };
+  // The copy's fix rules on a plain-HTML site before it is judged (an app stack's are fixed in its source by the agent).
+  const polish = stack.toolchain || stack.sourceOnly ? null : () => polishSite({ dir: siteDir, siteUrl: baseline?.url ?? null, siteName: businessName(request) ?? null });
   (async () => {
     try {
       if (repeat) {
@@ -234,6 +259,24 @@ export async function startBuild(request, { ownerId = null, deps = {}, agent = r
         log(`New design: ${composed.prompt.direction?.name}`);
       }
       const direction = composed.prompt.direction;
+      // An existing site first: its files are the project, and the fixed setup of an app stack is written over them.
+      if (seed) {
+        const from = seed.kind === 'capture'
+          ? await (deps.captureSite ?? captureSite)({ ...seed, signal: run.controller.signal, log, ownerId })
+          : seed;
+        // A site the build just checked and copied has a Check now: that is what the build is measured against.
+        if (!baseAudit && from?.projectId) baseAudit = deps.loadProject?.(from.projectId)?.audit ?? null;
+        if (from) {
+          log(from.kind === 'copy' ? 'Starting from the copy of your site' : 'Putting your code in the project');
+          seeded = await placeSeed(from, siteDir);
+          if (seeded) {
+            run.startedFrom = { kind: seeded.kind, from: seeded.from, files: seeded.files.length, pages: seeded.pages.length };
+            // Kept with the run: a later edit (edit.js) checks the site the same way.
+            run.ownScripts = seeded.own;
+            log(`Your site is in the project: ${seeded.files.length} files, ${seeded.pages.length} page(s)`);
+          }
+        }
+      }
       if (stack.toolchain) {
         log(`Setting up the ${stack.name} project`);
         await writeScaffold(stack, siteDir, { name: businessName(request) });
@@ -255,6 +298,9 @@ export async function startBuild(request, { ownerId = null, deps = {}, agent = r
         tmp: path.join(runDir(id), 'tmp'),
         fonts: madeFonts,
         images: placed,
+        existing: seeded,
+        polish,
+        assess,
         signal: run.controller.signal,
         limits: { usd: Math.max(0, costLimitUsd - before) },
         onEvent: (e) => {
@@ -269,6 +315,19 @@ export async function startBuild(request, { ownerId = null, deps = {}, agent = r
       });
       Object.assign(run, { status: out.checks.ok ? 'done' : 'failed', report: out.report, checks: { ok: out.checks.ok, issues: out.checks.issues, pages: out.checks.pages }, turns: out.turns, usage: out.usage, model: out.model, costUsd: roundUsd(before + (out.costUsd ?? agentCost)) });
       if (!out.checks.ok) run.error = 'The site was written but does not pass every check yet. It is kept, so you can look at it.';
+      // Once, at the end: the finished site measured like the Check measures any site, Lighthouse included, against the original.
+      // deps.measureSite: tests; a test's own agent gets no real measurement unless it asks for one.
+      const measure = deps.measureSite ?? (agent === runAgent ? measureSite : null);
+      if (out.checks.ok && assess && measure && await hasPages(run)) {
+        log('Measuring the finished site (speed, search, accessibility)');
+        try {
+          const audit = await measure({ dir: builtDirOf(run), lighthouse: true, scripts, signal: run.controller.signal });
+          run.quality = qualitySummary(compareQuality(audit, baseAudit), Boolean(baseAudit));
+          log(run.quality.worse.length ? `${run.quality.worse.length} check(s) worse than the original` : 'Nothing worse than the original');
+        } catch (err) {
+          run.quality = { error: String(err?.message ?? err).slice(0, 200) };
+        }
+      }
       if (await hasPages(run)) openPreview(run);
     } catch (err) {
       run.status = err?.code === 'stopped' ? 'stopped' : 'failed';
@@ -277,7 +336,13 @@ export async function startBuild(request, { ownerId = null, deps = {}, agent = r
     } finally {
       // The files the agent wrote: not the fonts and the owner's images put there for it, the fixed setup or the build's output.
       const given = new Set(placed.map((p) => p.path));
-      run.files = (await listFiles(siteDir)).filter((f) => projectFile(f) && stack.writable(f) && !given.has(f) && !f.startsWith(stack.publicDir ? `${stack.publicDir}/fonts/` : 'fonts/') && !(stack.toolchain && f === 'README.md'));
+      const written = (await listFiles(siteDir)).filter((f) => projectFile(f) && stack.writable(f) && !given.has(f) && !f.startsWith(stack.publicDir ? `${stack.publicDir}/fonts/` : 'fonts/') && !(stack.toolchain && f === 'README.md'));
+      // An existing site: the files the agent added or changed, and the pages of the site no longer there.
+      run.files = await changedSince(siteDir, seeded, written).catch(() => written);
+      if (seeded) {
+        run.removedPages = await missingPages(siteDir, seeded).catch(() => []);
+        if (run.removedPages.length) log(`Pages of your site no longer in it: ${run.removedPages.join(', ')}`);
+      }
       await rm(path.join(runDir(id), 'tmp'), { recursive: true, force: true }).catch(() => {});
       run.finishedAt = new Date().toISOString();
       await save(run).catch(() => {});
