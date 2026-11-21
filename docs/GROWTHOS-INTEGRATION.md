@@ -158,6 +158,11 @@ Like Growth OS on a repository (one template + a content list), but on the copy 
    but the top one is optional. The AI fills the top and the parts the draft has content for (feature cards, steps, a closing call
    to action) and leaves out the rest (pricing, testimonials); the homepage's own links stay where the AI gives none, its pictures
    do not. Needs the AI; without it (or when the homepage has no main heading) the frames of the nearest page, said in the notes.
+   The frames way takes the site's classes by what their words look like (`apply.js typicalClass`): body text = the paragraph
+   class holding the most sentences, a section heading = the h2/h3 class with the longest headings, lists and question boxes
+   the page's own; never simply the first `<p>` / `<h2>` (often a small label). On a builder's page (`draftInPlace`) the top
+   part keeps an intro of the length it was made for (`fitIntro`: whole sentences; the rest opens the first section), and the
+   frame a removed picture stood in goes with it.
    A box of buttons (a hero's two buttons) keeps each button's label and link; links that are the same on both sides (a menu)
    stay part of the template.
    A block without a heading that ends up partly empty (an illustration whose sample rows were not written, a row of logos with
@@ -168,7 +173,10 @@ Like Growth OS on a repository (one template + a content list), but on the copy 
 
 Settings: `SAS_CHANGES_AI` (`api` | `cli` | `off`; unset = api with `ANTHROPIC_API_KEY`, else cli when Claude Code is found),
 `SAS_CHANGES_AI_MODEL` (default `sonnet`), `SAS_CLAUDE_BIN`. Claude Code runs from an empty temporary folder with its own short
-system prompt, no tools and no MCP servers (about 1 000 tokens a call, not the project's instructions).
+system prompt, no tools and no MCP servers (about 1 000 tokens a call, not the project's instructions). The prompt goes in through
+stdin, which is then closed (on the command line it failed on Windows past ~32 000 characters, and an input left open could keep
+Claude Code waiting until the 240 s limit); a stall names the last line Claude Code wrote (a sign-in it needs). Own360's homepage
+as the template (183 slots, a 32 000-character prompt): 23 s. Test: `changes-fallback.test.js`.
 Measured (a two-page use-case site, real Claude through Claude Code): 16–19 s and about $0.02 a page; it chose the fitting picture
 of four; page checks 100; design check 4 of 4. Tests: `changes-template.test.js`, `changes-ai.test.js` (a stand-in answer; a test
 never asks the real AI).

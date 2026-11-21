@@ -77,8 +77,11 @@ function frameOf($, part, /** @type {string} */ sel) {
   const shell = $(part).clone();
   const target = shell.find(sel).first();
   if (!target.length) return null;
-  // the first paragraph next to the heading: the look of a paragraph in this part
-  const para = target.parent().children('p').first().clone();
+  // the paragraph next to the heading with the most words: the look of body text in this part (the first one is often a
+  // small label above the heading)
+  const ps = target.parent().children('p').toArray();
+  const longest = ps.sort((a, b) => $(b).text().trim().length - $(a).text().trim().length)[0];
+  const para = longest ? $(longest).clone() : target.parent().children('p').first().clone();
   let cur = target;
   while (cur.length && cur.get(0) !== shell.get(0)) {
     cur.siblings().remove();
@@ -151,16 +154,44 @@ function letWrap($, el, stop) {
 }
 
 /**
+ * The intro split where a builder's top part has room for it: whole sentences up to the old paragraph's length (with a
+ * quarter to spare), never fewer than one; the rest for the page below. Room unknown (0) = all of it on top.
+ * @param {string} intro @param {number} room  the length of the paragraph the intro replaces
+ */
+export function fitIntro(intro, room) {
+  const text = String(intro ?? '').trim();
+  const max = Math.max(room * 1.25, room + 40);
+  if (!room || text.length <= max) return { top: text, rest: '' };
+  const sentences = text.match(/[^.!?]+[.!?]+(?:\s+|$)|[^.!?]+$/g)?.map((s) => s.trim()).filter(Boolean) ?? [text];
+  const top = [sentences[0]];
+  for (const s of sentences.slice(1)) {
+    if (`${top.join(' ')} ${s}`.length > max) break;
+    top.push(s);
+  }
+  return { top: top.join(' '), rest: sentences.slice(top.length).join(' ') };
+}
+
+/**
  * Removes what a part says or shows of the template page (`keep`: elements that stay), then every box that held words and
  * is now empty, so no empty card of another page is left behind. Pictures of another page are never copied.
  */
 function clearOwn($, part, keep) {
   const kept = new Set(keep.flatMap((k) => [k, ...$(k).find('*').toArray()]));
   const holders = $(part).find('*').filter((_, el) => $(el).text().trim() !== '').toArray();
-  $(part).find(OWN_CONTENT).filter((_, el) => !kept.has(el) && $(el).closest('a, button').length === 0 && !keep.some((k) => $(el).find(k).length)).remove();
+  const gone = $(part).find(OWN_CONTENT).filter((_, el) => !kept.has(el) && $(el).closest('a, button').length === 0 && !keep.some((k) => $(el).find(k).length));
+  // where a picture or a video stood: its frame (a bordered box, a shadowed card) would stay as an empty rectangle
+  const frames = gone.filter('img, picture, video').toArray().map((el) => $(el).parent().get(0)).filter(Boolean);
+  gone.remove();
   for (const el of holders.reverse()) {
     if (kept.has(el) || keep.some((k) => $(el).find(k).length)) continue;
     if ($(el).text().trim() === '' && !$(el).find('svg, img, video, canvas').length) $(el).remove();
+  }
+  const empty = (el) => $(el).text().trim() === '' && !$(el).find('svg, img, picture, video, canvas, iframe').length && !kept.has(el) && !keep.some((k) => $(el).find(k).length);
+  for (const start of frames) {
+    if (!$(part).find(start).length) continue; // already removed with another
+    let top = null;
+    for (let cur = $(start); cur.length && cur.get(0) !== $(part).get(0) && empty(cur.get(0)); cur = cur.parent()) top = cur;
+    top?.remove();
   }
 }
 
@@ -211,6 +242,17 @@ function draftInPlace($, d, { links, contact, changeId }) {
   };
   const model = content.find((el) => $(el).find('h2').length > 0 && firstPara(el).length > 0);
   if (!heroes.length || !model) return false;
+
+  // A builder sizes its top part for its own words (often a fixed height): a longer intro runs out of it and under the next
+  // part. The top keeps as many of the intro's sentences as fit the length of the paragraph it replaces; the rest opens the
+  // first section.
+  const oldIntro = firstPara(heroes[0]);
+  const fit = fitIntro(d.intro, oldIntro.length ? textOf($, oldIntro.first()).length : 0);
+  d = { ...d, intro: fit.top };
+  if (fit.rest) {
+    if (d.sections.length) d = { ...d, sections: [{ ...d.sections[0], body: [fit.rest, d.sections[0].body].filter(Boolean).join(' ') }, ...d.sections.slice(1)] };
+    else d = { ...d, sections: [{ h2: d.title && d.title !== d.h1 ? d.title : d.h1, body: fit.rest }] };
+  }
 
   for (const hero of heroes) {
     // the heading in every copy (a tablet copy may draw it as an h2 with the same words)
@@ -349,21 +391,60 @@ const contactPath = (files) => {
   return f ? servedPath(f) : null;
 };
 
+/**
+ * The class the page gives most of its `sel` elements of the kind asked for, chosen by what their words look like, never by
+ * which comes first: the first <p> of a page is often a small label above a heading (a capitalised one-liner), the first <h2>
+ * a section's label ("Sales & Revenue") while its real headings are <h3>s. Body text = the class holding the most words in
+ * paragraphs of a sentence or more; a section heading = the class whose headings are the longest on average (a label is a few
+ * words); a list = the class holding the most words. Elements inside links, buttons, navigation, header and footer do not
+ * count. '' when nothing qualifies.
+ * @param {'body' | 'heading' | 'list'} kind
+ */
+export function typicalClass($, scope, /** @type {string} */ sel, kind) {
+  /** @type {Map<string, { n: number, chars: number }>} */
+  const by = new Map();
+  scope.find(sel).each((_, el) => {
+    if ($(el).closest('a, button, nav, header, footer, [role="navigation"]').length) return;
+    const words = $(el).text().replace(/\s+/g, ' ').trim();
+    if (!words) return;
+    if (kind === 'body' && (words.length < 60 || words.split(' ').length < 10)) return;
+    if (kind === 'heading' && words.split(' ').length < 3) return;
+    const c = ($(el).attr('class') ?? '').trim();
+    const e = by.get(c) ?? { n: 0, chars: 0 };
+    e.n++;
+    e.chars += words.length;
+    by.set(c, e);
+  });
+  let best = '';
+  let score = -1;
+  for (const [c, e] of by) {
+    const s = kind === 'heading' ? e.chars / e.n : e.chars;
+    if (s > score) [best, score] = [c, s];
+  }
+  return best;
+}
+
 /** The draft as the content of the main part, in the site's own classes. */
 function draftHtml($, main, d, { links, contact, changeId }) {
   const h1 = classOf($, main, 'h1');
-  const h2 = classOf($, main, 'h2');
-  const p = classOf($, main, 'p');
+  const h2 = typicalClass($, main, 'h2, h3', 'heading') || classOf($, main, 'h2');
+  const p = typicalClass($, main, 'p', 'body') || classOf($, main, 'p');
+  const ul = typicalClass($, main, 'ul', 'list');
+  const li = typicalClass($, main, 'ul > li', 'list');
+  const details = classOf($, main, 'details');
+  const summary = classOf($, main, 'summary');
+  const list = (/** @type {string[]} */ items) => `<ul${cls(ul)}>${items.map((x) => `<li${cls(li)}>${x}</li>`).join('')}</ul>`;
   const button = (main.find('a[class*="btn"], a[class*="button"], a[class*="cta"]').first().attr('class') ?? '').trim();
   const container = (main.find('div[class*="container"], div[class*="wrapper"], div[class*="inner"], div[class*="max-w"]').first().attr('class') ?? '').trim();
   const out = [];
   if (d.h1 || d.title) out.push(`<h1${cls(h1)}>${esc(d.h1 || d.title)}</h1>`);
   if (d.intro) out.push(`<p${cls(p)}>${esc(d.intro)}</p>`);
   for (const s of d.sections) out.push(`<section>${s.h2 ? `<h2${cls(h2)}>${esc(s.h2)}</h2>` : ''}${s.body ? `<p${cls(p)}>${esc(s.body)}</p>` : ''}</section>`);
-  if (d.proof.length) out.push(`<section><h2${cls(h2)}>Proof</h2><ul>${d.proof.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></section>`);
-  if (d.faq.length) out.push(`<section><h2${cls(h2)}>Questions</h2>${d.faq.map((f) => `<details><summary>${esc(f.q)}</summary><p${cls(p)}>${esc(f.a)}</p></details>`).join('')}</section>`);
+  if (d.proof.length) out.push(`<section><h2${cls(h2)}>Proof</h2>${list(d.proof.map(esc))}</section>`);
+  // a question in the page's own question boxes when it has them, else in its body text
+  if (d.faq.length) out.push(`<section><h2${cls(h2)}>Questions</h2>${d.faq.map((f) => `<details${cls(details)}><summary${cls(summary || p)}>${esc(f.q)}</summary><p${cls(p)}>${esc(f.a)}</p></details>`).join('')}</section>`);
   if (d.cta) out.push(`<p><a${cls(button)} href="${esc(contact ?? '/')}">${esc(d.cta)}</a></p>`);
-  if (links.length) out.push(`<nav aria-label="Related pages"><h2${cls(h2)}>Related</h2><ul>${links.map((l) => `<li><a href="${esc(l.path)}">${esc(l.title)}</a></li>`).join('')}</ul></nav>`);
+  if (links.length) out.push(`<nav aria-label="Related pages"><h2${cls(h2)}>Related</h2>${list(links.map((l) => `<a href="${esc(l.path)}">${esc(l.title)}</a>`))}</nav>`);
   const body = out.join('\n');
   return `<div data-remastly-change="${esc(changeId)}"${container ? ` class="${esc(container)}"` : ''}>\n${body}\n</div>`;
 }
